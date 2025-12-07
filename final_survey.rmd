@@ -1,0 +1,985 @@
+---
+title: "Studying the Association Between Sleep and Depression Outcomes (Survey-Weighted Analysis)"
+author: "Tianyun Jiang, Siyuan Zhou, Ethan Hardcastle"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+This analysis examines the association between sleep and depression outcomes among U.S. adults using NHANES 2017-2020 ("Pre-Pandemic") data with **survey-weighted methods**.
+
+We use the `survey` package to account for the complex survey design, including:
+- **Sampling weights** (MEC exam weights or interview weights)
+- **Primary sampling units (PSU)** for clustering
+- **Strata** for stratification
+
+This approach provides nationally representative estimates that properly account for NHANES sampling design, following CDC analytic guidelines (Vital and Health Statistics, Series 2, No. 190, May 2022).
+
+# Data Loading and Preparation
+
+```{r load-packages}
+# Load required packages
+library(tidyverse)
+library(survey)    # For survey-weighted analysis
+library(car)       # For diagnostic tests
+library(broom)     # For tidy model outputs
+library(gridExtra) # For arranging plots
+```
+
+```{r load-data}
+# Load the processed dataset
+data <- read.csv("dataset2_processed_zero.csv")
+
+# Display basic information
+cat("Dataset dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
+```
+
+```{r create-response}
+# Create PHQ-9 total score (sum of 9 depression items, each scored 0-3)
+phq9_items <- c("Little_interest_or_pleasure_in_doing_things",
+                "Feeling_down_depressed_or_hopeless",
+                "Trouble_sleeping_or_sleeping_too_much",
+                "Feeling_tired_or_having_little_energy",
+                "Poor_appetite_or_overeating",
+                "Feeling_bad_about_yourself_or_failure",
+                "Trouble_concentrating",
+                "Moving_speaking_slowly_or_being_fidgety_restless",
+                "Thoughts_of_being_better_off_dead_self_harm")
+
+# Calculate PHQ-9 total score
+data$PHQ9_total <- rowSums(data[, phq9_items], na.rm = FALSE)
+
+# Summary of PHQ-9 scores
+cat("\nPHQ-9 Total Score Summary:\n")
+summary(data$PHQ9_total)
+```
+
+```{r create-sleep-variables}
+# Create average sleep duration (combining weekday and weekend sleep)
+data$Avg_sleep_hours <- (data$Hours_of_sleep_on_weekdays_workdays +
+                          data$Hours_of_sleep_on_weekends_non_workdays) / 2
+
+# Create binary insomnia indicator
+# Coding: 1 = Yes, 2 = No, so we convert to binary (1 = Yes insomnia, 0 = No)
+data$Insomnia <- ifelse(data$Ever_told_by_a_doctor_professional_you_had_trouble_sleeping == 1, 1, 0)
+
+# Create sleep apnea indicator based on snoring and gasping frequency
+# Binary: 1 if frequent snoring OR frequent gasping (score >= 3)
+data$Sleep_apnea <- ifelse(data$How_often_do_you_snore >= 3 |
+                            data$How_often_snort_gasp_or_stop_breathing_during_sleep >= 3, 1, 0)
+
+cat("Sleep Variables Created:\n")
+cat("Average Sleep Hours Summary:\n")
+summary(data$Avg_sleep_hours)
+cat("\nInsomnia prevalence:", mean(data$Insomnia, na.rm = TRUE) * 100, "%\n")
+cat("Sleep Apnea prevalence:", mean(data$Sleep_apnea, na.rm = TRUE) * 100, "%\n")
+```
+
+```{r prepare-covariates}
+# Prepare demographic covariates
+data$Sex <- factor(data$Sex, levels = c(1, 2), labels = c("Male", "Female"))
+data$Race <- factor(data$Race_Hispanic_origin)
+
+cat("\nDemographic Variables Summary:\n")
+cat("Sex distribution:\n")
+table(data$Sex)
+cat("\nAge summary:\n")
+summary(data$Age_in_years_at_screening)
+cat("\nFamily Income-to-Poverty Ratio summary:\n")
+summary(data$Family_income_to_poverty_ratio)
+```
+
+```{r filter-valid-data}
+# Filter to adults (18+) with valid PHQ-9 scores, sleep data, and survey weights
+data_analysis <- data %>%
+  filter(Age_in_years_at_screening >= 18,
+         !is.na(PHQ9_total),
+         !is.na(Avg_sleep_hours),
+         Hours_of_sleep_on_weekdays_workdays_NA_indicator == 0,
+         Hours_of_sleep_on_weekends_non_workdays_NA_indicator == 0,
+         # Require valid survey weights for weighted analysis
+         MEC_exam_sample_weight > 0,
+         !is.na(Masked_variance_pseudo_PSU),
+         !is.na(Masked_variance_pseudo_stratum))
+
+cat("Analysis sample size:", nrow(data_analysis), "\n")
+cat("Age range:", min(data_analysis$Age_in_years_at_screening), "-",
+    max(data_analysis$Age_in_years_at_screening), "\n")
+```
+
+# Survey Design Setup
+
+```{r survey-design}
+# Create survey design object
+# Following CDC guidelines for NHANES complex survey design
+
+# Set survey options for lonely PSU
+options(survey.lonely.psu = "adjust")
+
+# Create the survey design object
+des <- svydesign(
+  id = ~Masked_variance_pseudo_PSU,           # Primary sampling unit
+  strata = ~Masked_variance_pseudo_stratum,    # Stratum
+  weights = ~MEC_exam_sample_weight,           # MEC exam sample weight
+  data = data_analysis,
+  nest = TRUE
+)
+
+cat("Survey Design Object Created\n")
+cat("Design type: Complex survey with PSU clustering and stratification\n")
+cat("Number of observations:", nrow(data_analysis), "\n")
+cat("Number of PSUs:", length(unique(data_analysis$Masked_variance_pseudo_PSU)), "\n")
+cat("Number of strata:", length(unique(data_analysis$Masked_variance_pseudo_stratum)), "\n")
+```
+
+## Survey-Weighted Descriptive Statistics
+
+```{r weighted-descriptives}
+cat("=== Survey-Weighted vs Unweighted Descriptive Statistics ===\n\n")
+
+# PHQ-9 Total Score
+cat("PHQ-9 Total Score:\n")
+cat("  Unweighted mean:", round(mean(data_analysis$PHQ9_total, na.rm = TRUE), 3), "\n")
+cat("  Weighted mean:  ", round(svymean(~PHQ9_total, des, na.rm = TRUE)[1], 3), "\n")
+cat("  Weighted SE:    ", round(SE(svymean(~PHQ9_total, des, na.rm = TRUE)), 3), "\n\n")
+
+# Sleep Duration
+cat("Average Sleep Hours:\n")
+cat("  Unweighted mean:", round(mean(data_analysis$Avg_sleep_hours, na.rm = TRUE), 3), "\n")
+cat("  Weighted mean:  ", round(svymean(~Avg_sleep_hours, des, na.rm = TRUE)[1], 3), "\n")
+cat("  Weighted SE:    ", round(SE(svymean(~Avg_sleep_hours, des, na.rm = TRUE)), 3), "\n\n")
+
+# Insomnia Prevalence
+cat("Insomnia Prevalence:\n")
+insomnia_prop <- svymean(~Insomnia, des, na.rm = TRUE)
+cat("  Unweighted:", round(mean(data_analysis$Insomnia, na.rm = TRUE) * 100, 2), "%\n")
+cat("  Weighted:  ", round(insomnia_prop[1] * 100, 2), "%\n")
+cat("  Weighted SE:", round(SE(insomnia_prop) * 100, 2), "%\n\n")
+
+# Sleep Apnea Prevalence
+cat("Sleep Apnea Prevalence:\n")
+apnea_prop <- svymean(~Sleep_apnea, des, na.rm = TRUE)
+cat("  Unweighted:", round(mean(data_analysis$Sleep_apnea, na.rm = TRUE) * 100, 2), "%\n")
+cat("  Weighted:  ", round(apnea_prop[1] * 100, 2), "%\n")
+cat("  Weighted SE:", round(SE(apnea_prop) * 100, 2), "%\n")
+```
+
+```{r weighted-demographics}
+# Sex distribution
+cat("\n=== Sex Distribution ===\n")
+sex_table <- svytable(~Sex, des)
+sex_prop <- prop.table(sex_table) * 100
+cat("  Male:  ", round(sex_prop["Male"], 2), "%\n")
+cat("  Female:", round(sex_prop["Female"], 2), "%\n")
+
+# Age
+cat("\n=== Age Statistics ===\n")
+age_mean <- svymean(~Age_in_years_at_screening, des)
+cat("  Weighted mean:", round(age_mean[1], 2), "\n")
+cat("  Weighted SE:  ", round(SE(age_mean), 2), "\n")
+```
+
+# Stage 1: Base Model with Survey Weights
+
+In Stage 1, we use survey-weighted generalized linear models (`svyglm`) to examine the association between sleep variables and PHQ-9 scores, adjusting for demographics.
+
+## Exploratory Data Analysis
+
+```{r eda-phq9, fig.width=10, fig.height=4}
+# Weighted and unweighted distributions
+par(mfrow = c(1, 2))
+
+# Unweighted distribution
+hist(data_analysis$PHQ9_total,
+     breaks = 28,
+     main = "Distribution of PHQ-9 (Unweighted)",
+     xlab = "PHQ-9 Total Score (0-27)",
+     col = "steelblue",
+     border = "white")
+
+# Weighted distribution approximation using survey package
+svyhist(~PHQ9_total, des,
+        breaks = 28,
+        main = "Distribution of PHQ-9 (Weighted)",
+        xlab = "PHQ-9 Total Score (0-27)",
+        col = "coral",
+        border = "white")
+```
+
+```{r eda-sleep-duration, fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+
+hist(data_analysis$Avg_sleep_hours,
+     breaks = 20,
+     main = "Average Sleep Hours (Unweighted)",
+     xlab = "Average Sleep Hours",
+     col = "darkgreen",
+     border = "white")
+
+svyhist(~Avg_sleep_hours, des,
+        breaks = 20,
+        main = "Average Sleep Hours (Weighted)",
+        xlab = "Average Sleep Hours",
+        col = "lightgreen",
+        border = "white")
+```
+
+```{r eda-bivariate-weighted}
+# Survey-weighted correlation between sleep and depression
+cat("Survey-weighted correlation between sleep and depression:\n")
+
+# Calculate weighted means
+mean_sleep <- svymean(~Avg_sleep_hours, des, na.rm = TRUE)[1]
+mean_phq9 <- svymean(~PHQ9_total, des, na.rm = TRUE)[1]
+
+# Calculate weighted covariance and variances
+cov_data <- data_analysis %>%
+  select(Avg_sleep_hours, PHQ9_total) %>%
+  filter(!is.na(Avg_sleep_hours) & !is.na(PHQ9_total))
+
+# Weighted correlation using svyvar
+var_matrix <- svyvar(~Avg_sleep_hours + PHQ9_total, des, na.rm = TRUE)
+cor_matrix <- cov2cor(var_matrix)
+
+cat("Correlation coefficient:", round(cor_matrix[1, 2], 4), "\n")
+cat("(Note: This is the survey-weighted correlation)\n")
+```
+
+```{r boxplot-weighted, fig.width=10, fig.height=5}
+# Weighted boxplot comparison
+par(mfrow = c(1, 2))
+
+# Unweighted
+boxplot(PHQ9_total ~ Insomnia, data = data_analysis,
+        names = c("No Insomnia", "Insomnia"),
+        xlab = "Insomnia Status",
+        ylab = "PHQ-9 Total Score",
+        main = "PHQ-9 by Insomnia (Unweighted)",
+        col = c("lightblue", "salmon"))
+
+# Survey-weighted mean comparison
+insomnia_means <- svyby(~PHQ9_total, ~Insomnia, des, svymean, na.rm = TRUE)
+barplot(insomnia_means$PHQ9_total,
+        names.arg = c("No Insomnia", "Insomnia"),
+        xlab = "Insomnia Status",
+        ylab = "PHQ-9 Total Score (Weighted Mean)",
+        main = "PHQ-9 by Insomnia (Weighted)",
+        col = c("lightblue", "salmon"),
+        ylim = c(0, max(insomnia_means$PHQ9_total) * 1.2))
+
+# Add error bars
+arrows(x0 = c(0.7, 1.9),
+       y0 = insomnia_means$PHQ9_total - 1.96 * insomnia_means$se,
+       x1 = c(0.7, 1.9),
+       y1 = insomnia_means$PHQ9_total + 1.96 * insomnia_means$se,
+       angle = 90, code = 3, length = 0.1, lwd = 2)
+```
+
+## Base Model with Survey Weights
+
+```{r base-model-weighted}
+# Fit survey-weighted GLM
+# Using Gaussian family (equivalent to linear regression but properly weighted)
+model_base_svy <- svyglm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                           Sex + Race + Age_in_years_at_screening +
+                           Family_income_to_poverty_ratio + Body_mass_index,
+                         design = des,
+                         family = gaussian())
+
+cat("=== Stage 1: Base Model (Survey-Weighted) ===\n\n")
+summary(model_base_svy)
+```
+
+## Model Diagnostics
+
+```{r diagnostics-weighted-s1, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Residuals vs Fitted
+plot(fitted(model_base_svy), residuals(model_base_svy, type = "pearson"),
+     pch = 16, col = rgb(0, 0, 0, 0.2),
+     xlab = "Fitted Values",
+     ylab = "Pearson Residuals",
+     main = "Residuals vs Fitted (Weighted)")
+abline(h = 0, col = "red", lwd = 2)
+lines(lowess(fitted(model_base_svy), residuals(model_base_svy, type = "pearson")),
+      col = "blue", lwd = 2)
+
+# Q-Q plot
+qqnorm(residuals(model_base_svy, type = "pearson"),
+       main = "Normal Q-Q Plot (Weighted)",
+       pch = 16, col = rgb(0, 0, 0, 0.2))
+qqline(residuals(model_base_svy, type = "pearson"), col = "red", lwd = 2)
+```
+
+```{r design-effect}
+# Calculate design effects to assess impact of survey weighting
+cat("\n=== Design Effects ===\n")
+cat("Design effect quantifies how much survey design increases variance\n")
+cat("compared to simple random sampling. Values > 2 indicate substantial\n")
+cat("impact of complex survey design.\n\n")
+
+# Effective sample size
+n_actual <- nobs(model_base_svy)
+cat("Actual sample size:", n_actual, "\n")
+
+# For key variables
+deff_sleep <- svymean(~Avg_sleep_hours, des, deff = TRUE)
+cat("Design effect for sleep duration:", round(deff(deff_sleep), 3), "\n")
+
+deff_phq9 <- svymean(~PHQ9_total, des, deff = TRUE)
+cat("Design effect for PHQ-9 score:", round(deff(deff_phq9), 3), "\n")
+```
+
+## Base Model Interpretation
+
+```{r base-interpretation-weighted}
+cat("\n=== Key Findings from Survey-Weighted Base Model ===\n\n")
+
+coefs <- summary(model_base_svy)$coefficients
+
+cat("Sleep Variables Effects on PHQ-9 Score:\n\n")
+
+cat("1. Average Sleep Hours:\n")
+cat("   Coefficient:", round(coefs["Avg_sleep_hours", "Estimate"], 4), "\n")
+cat("   Std. Error: ", round(coefs["Avg_sleep_hours", "Std. Error"], 4), "\n")
+cat("   p-value:    ", format(coefs["Avg_sleep_hours", "Pr(>|t|)"], scientific = TRUE), "\n")
+if (coefs["Avg_sleep_hours", "Pr(>|t|)"] < 0.05) {
+  if (coefs["Avg_sleep_hours", "Estimate"] < 0) {
+    cat("   Interpretation: More sleep is associated with LOWER depression scores.\n")
+    cat("   Each additional hour of sleep is associated with",
+        abs(round(coefs["Avg_sleep_hours", "Estimate"], 2)),
+        "point decrease in PHQ-9.\n\n")
+  } else {
+    cat("   Interpretation: More sleep is associated with HIGHER depression scores.\n\n")
+  }
+} else {
+  cat("   Interpretation: No significant association detected.\n\n")
+}
+
+cat("2. Insomnia (diagnosed trouble sleeping):\n")
+cat("   Coefficient:", round(coefs["Insomnia", "Estimate"], 4), "\n")
+cat("   Std. Error: ", round(coefs["Insomnia", "Std. Error"], 4), "\n")
+cat("   p-value:    ", format(coefs["Insomnia", "Pr(>|t|)"], scientific = TRUE), "\n")
+if (coefs["Insomnia", "Pr(>|t|)"] < 0.05) {
+  cat("   Interpretation: Diagnosed insomnia is associated with",
+      round(coefs["Insomnia", "Estimate"], 2), "point higher PHQ-9 score.\n\n")
+} else {
+  cat("   Interpretation: No significant association detected.\n\n")
+}
+
+cat("3. Sleep Apnea (frequent snoring/gasping):\n")
+cat("   Coefficient:", round(coefs["Sleep_apnea", "Estimate"], 4), "\n")
+cat("   Std. Error: ", round(coefs["Sleep_apnea", "Std. Error"], 4), "\n")
+cat("   p-value:    ", format(coefs["Sleep_apnea", "Pr(>|t|)"], scientific = TRUE), "\n")
+if (coefs["Sleep_apnea", "Pr(>|t|)"] < 0.05) {
+  cat("   Interpretation: Sleep apnea symptoms are associated with",
+      round(coefs["Sleep_apnea", "Estimate"], 2), "point change in PHQ-9 score.\n\n")
+} else {
+  cat("   Interpretation: No significant association detected.\n\n")
+}
+```
+
+## Confidence Intervals
+
+```{r ci-base-weighted}
+cat("\n=== 95% Confidence Intervals for Sleep Variables ===\n\n")
+ci <- confint(model_base_svy)
+sleep_vars <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+ci_sleep <- ci[rownames(ci) %in% sleep_vars, ]
+print(round(ci_sleep, 4))
+```
+
+# Stage 2: Adding Lifestyle Covariates
+
+```{r stage2-model-weighted}
+# Fit model with lifestyle covariates
+model_lifestyle_svy <- svyglm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                                Sex + Race + Age_in_years_at_screening +
+                                Family_income_to_poverty_ratio + Body_mass_index +
+                                # Lifestyle covariates
+                                Work_vigorous_intensity_activity +
+                                Work_moderate_intensity_activity +
+                                Transport_walk_or_bicycle +
+                                Recreation_vigorous_intensity_activity +
+                                Secondhand_smoke_exposure_at_home,
+                              design = des,
+                              family = gaussian())
+
+cat("=== Stage 2: Model with Lifestyle Covariates (Survey-Weighted) ===\n\n")
+summary(model_lifestyle_svy)
+```
+
+## Model Comparison
+
+```{r model-comparison-s2-weighted}
+# Wald test for nested models
+cat("\n=== Model Comparison: Base vs Lifestyle ===\n")
+cat("Wald test for joint significance of lifestyle covariates:\n\n")
+
+# Likelihood ratio test using regTermTest
+lifestyle_vars <- c("Work_vigorous_intensity_activity",
+                    "Work_moderate_intensity_activity",
+                    "Transport_walk_or_bicycle",
+                    "Recreation_vigorous_intensity_activity",
+                    "Secondhand_smoke_exposure_at_home")
+
+wald_test_s2 <- regTermTest(model_lifestyle_svy, ~Work_vigorous_intensity_activity +
+                              Work_moderate_intensity_activity +
+                              Transport_walk_or_bicycle +
+                              Recreation_vigorous_intensity_activity +
+                              Secondhand_smoke_exposure_at_home)
+print(wald_test_s2)
+
+if (wald_test_s2$p < 0.05) {
+  cat("\nConclusion: Lifestyle covariates are jointly significant (p < 0.05).\n")
+  cat("Adding lifestyle variables significantly improves model fit.\n")
+} else {
+  cat("\nConclusion: Lifestyle covariates are not jointly significant.\n")
+}
+```
+
+## Interaction Effects: Lifestyle × Sleep Variables
+
+```{r interaction-lifestyle-weighted}
+# Test interactions between lifestyle and sleep variables
+
+cat("\n=== Testing Lifestyle × Sleep Interactions ===\n\n")
+
+# 1. Recreation activity × Sleep duration
+model_interact_activity_svy <- svyglm(
+  PHQ9_total ~ Avg_sleep_hours * Recreation_vigorous_intensity_activity +
+    Insomnia + Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle +
+    Secondhand_smoke_exposure_at_home,
+  design = des,
+  family = gaussian()
+)
+
+cat("1. Sleep Duration × Recreation Activity:\n")
+interact_coef1 <- summary(model_interact_activity_svy)$coefficients
+interact_row1 <- grep(":", rownames(interact_coef1))
+if (length(interact_row1) > 0) {
+  print(interact_coef1[interact_row1, , drop = FALSE])
+} else {
+  cat("   No interaction term found.\n")
+}
+
+# 2. Insomnia × Secondhand smoke
+model_interact_smoke_svy <- svyglm(
+  PHQ9_total ~ Avg_sleep_hours +
+    Insomnia * Secondhand_smoke_exposure_at_home +
+    Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle +
+    Recreation_vigorous_intensity_activity,
+  design = des,
+  family = gaussian()
+)
+
+cat("\n2. Insomnia × Secondhand Smoke Exposure:\n")
+interact_coef2 <- summary(model_interact_smoke_svy)$coefficients
+interact_row2 <- grep(":", rownames(interact_coef2))
+if (length(interact_row2) > 0) {
+  print(interact_coef2[interact_row2, , drop = FALSE])
+} else {
+  cat("   No interaction term found.\n")
+}
+
+# 3. Sleep duration × Active transport
+model_interact_transport_svy <- svyglm(
+  PHQ9_total ~ Avg_sleep_hours * Transport_walk_or_bicycle +
+    Insomnia + Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home,
+  design = des,
+  family = gaussian()
+)
+
+cat("\n3. Sleep Duration × Active Transport:\n")
+interact_coef3 <- summary(model_interact_transport_svy)$coefficients
+interact_row3 <- grep(":", rownames(interact_coef3))
+if (length(interact_row3) > 0) {
+  print(interact_coef3[interact_row3, , drop = FALSE])
+} else {
+  cat("   No interaction term found.\n")
+}
+```
+
+```{r joint-test-lifestyle-interact}
+# Joint test for all lifestyle × sleep interactions
+cat("\n=== Joint Test: All Lifestyle × Sleep Interactions ===\n\n")
+
+model_full_interact_lifestyle_svy <- svyglm(
+  PHQ9_total ~
+    Avg_sleep_hours * (Recreation_vigorous_intensity_activity +
+                        Work_vigorous_intensity_activity +
+                        Transport_walk_or_bicycle) +
+    Insomnia * Secondhand_smoke_exposure_at_home +
+    Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_moderate_intensity_activity,
+  design = des,
+  family = gaussian()
+)
+
+# Test interaction terms
+interact_terms <- c("Avg_sleep_hours:Recreation_vigorous_intensity_activity",
+                    "Avg_sleep_hours:Work_vigorous_intensity_activity",
+                    "Avg_sleep_hours:Transport_walk_or_bicycle",
+                    "Insomnia:Secondhand_smoke_exposure_at_home")
+
+# Check which interaction terms actually exist in the model
+model_coef_names <- names(coef(model_full_interact_lifestyle_svy))
+existing_interact <- intersect(interact_terms, model_coef_names)
+
+if (length(existing_interact) > 0) {
+  wald_interact <- regTermTest(model_full_interact_lifestyle_svy,
+                                as.formula(paste("~", paste(existing_interact, collapse = " + "))))
+  print(wald_interact)
+} else {
+  cat("No interaction terms to test.\n")
+}
+```
+
+## Stage 2 Diagnostics
+
+```{r diagnostics-s2-weighted, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+plot(fitted(model_lifestyle_svy), residuals(model_lifestyle_svy, type = "pearson"),
+     pch = 16, col = rgb(0, 0, 0, 0.2),
+     xlab = "Fitted Values",
+     ylab = "Pearson Residuals",
+     main = "Residuals vs Fitted (Stage 2)")
+abline(h = 0, col = "red", lwd = 2)
+lines(lowess(fitted(model_lifestyle_svy), residuals(model_lifestyle_svy, type = "pearson")),
+      col = "blue", lwd = 2)
+
+qqnorm(residuals(model_lifestyle_svy, type = "pearson"),
+       main = "Normal Q-Q Plot (Stage 2)",
+       pch = 16, col = rgb(0, 0, 0, 0.2))
+qqline(residuals(model_lifestyle_svy, type = "pearson"), col = "red", lwd = 2)
+```
+
+# Stage 3: Adding Medical Intervention Covariates
+
+```{r stage3-model-weighted}
+# Fit model with medical intervention covariates
+model_medical_svy <- svyglm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                              Sex + Race + Age_in_years_at_screening +
+                              Family_income_to_poverty_ratio + Body_mass_index +
+                              # Lifestyle covariates
+                              Work_vigorous_intensity_activity +
+                              Work_moderate_intensity_activity +
+                              Transport_walk_or_bicycle +
+                              Recreation_vigorous_intensity_activity +
+                              Secondhand_smoke_exposure_at_home +
+                              # Medical intervention covariates
+                              Took_any_prescription_medicine +
+                              Number_of_prescription_medicines +
+                              Seen_talked_to_a_mental_health_professional,
+                            design = des,
+                            family = gaussian())
+
+cat("=== Stage 3: Model with Medical Intervention Covariates (Survey-Weighted) ===\n\n")
+summary(model_medical_svy)
+```
+
+## Model Comparison
+
+```{r model-comparison-s3-weighted}
+cat("\n=== Model Comparison: Lifestyle vs Medical ===\n")
+cat("Wald test for joint significance of medical intervention covariates:\n\n")
+
+wald_test_s3 <- regTermTest(model_medical_svy, ~Took_any_prescription_medicine +
+                              Number_of_prescription_medicines +
+                              Seen_talked_to_a_mental_health_professional)
+print(wald_test_s3)
+
+if (wald_test_s3$p < 0.05) {
+  cat("\nConclusion: Medical intervention covariates are jointly significant (p < 0.05).\n")
+} else {
+  cat("\nConclusion: Medical intervention covariates are not jointly significant.\n")
+}
+```
+
+## Interaction Effects: Medical Intervention × Sleep Variables
+
+```{r interaction-medical-weighted}
+cat("\n=== Testing Medical Intervention × Sleep Interactions ===\n\n")
+
+# 1. Prescription medicine × Sleep variables
+model_interact_meds_svy <- svyglm(
+  PHQ9_total ~ Avg_sleep_hours * Took_any_prescription_medicine +
+    Insomnia * Took_any_prescription_medicine +
+    Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle +
+    Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home +
+    Number_of_prescription_medicines +
+    Seen_talked_to_a_mental_health_professional,
+  design = des,
+  family = gaussian()
+)
+
+cat("1. Sleep Variables × Prescription Medicine Use:\n")
+interact_coef_med1 <- summary(model_interact_meds_svy)$coefficients
+interact_row_med1 <- grep(":", rownames(interact_coef_med1))
+if (length(interact_row_med1) > 0) {
+  print(interact_coef_med1[interact_row_med1, , drop = FALSE])
+}
+
+# 2. Mental health professional × Sleep variables
+model_interact_therapy_svy <- svyglm(
+  PHQ9_total ~ Avg_sleep_hours * Seen_talked_to_a_mental_health_professional +
+    Insomnia * Seen_talked_to_a_mental_health_professional +
+    Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle +
+    Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home +
+    Took_any_prescription_medicine +
+    Number_of_prescription_medicines,
+  design = des,
+  family = gaussian()
+)
+
+cat("\n2. Sleep Variables × Mental Health Professional:\n")
+interact_coef_med2 <- summary(model_interact_therapy_svy)$coefficients
+interact_row_med2 <- grep(":", rownames(interact_coef_med2))
+if (length(interact_row_med2) > 0) {
+  print(interact_coef_med2[interact_row_med2, , drop = FALSE])
+}
+```
+
+```{r joint-test-medical-interact}
+# Joint test for all medical × sleep interactions
+cat("\n=== Joint Test: All Medical × Sleep Interactions ===\n\n")
+
+model_full_interact_medical_svy <- svyglm(
+  PHQ9_total ~
+    Avg_sleep_hours * (Took_any_prescription_medicine +
+                        Seen_talked_to_a_mental_health_professional) +
+    Insomnia * (Took_any_prescription_medicine +
+                  Seen_talked_to_a_mental_health_professional) +
+    Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity +
+    Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle +
+    Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home +
+    Number_of_prescription_medicines,
+  design = des,
+  family = gaussian()
+)
+
+# Test interaction terms
+med_interact_terms <- c("Avg_sleep_hours:Took_any_prescription_medicine",
+                        "Avg_sleep_hours:Seen_talked_to_a_mental_health_professional",
+                        "Insomnia:Took_any_prescription_medicine",
+                        "Insomnia:Seen_talked_to_a_mental_health_professional")
+
+model_coef_names_med <- names(coef(model_full_interact_medical_svy))
+existing_interact_med <- intersect(med_interact_terms, model_coef_names_med)
+
+if (length(existing_interact_med) > 0) {
+  wald_interact_med <- regTermTest(model_full_interact_medical_svy,
+                                   as.formula(paste("~", paste(existing_interact_med, collapse = " + "))))
+  print(wald_interact_med)
+} else {
+  cat("No interaction terms to test.\n")
+}
+```
+
+## Stage 3 Diagnostics
+
+```{r diagnostics-s3-weighted, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+plot(fitted(model_medical_svy), residuals(model_medical_svy, type = "pearson"),
+     pch = 16, col = rgb(0, 0, 0, 0.2),
+     xlab = "Fitted Values",
+     ylab = "Pearson Residuals",
+     main = "Residuals vs Fitted (Stage 3)")
+abline(h = 0, col = "red", lwd = 2)
+lines(lowess(fitted(model_medical_svy), residuals(model_medical_svy, type = "pearson")),
+      col = "blue", lwd = 2)
+
+qqnorm(residuals(model_medical_svy, type = "pearson"),
+       main = "Normal Q-Q Plot (Stage 3)",
+       pch = 16, col = rgb(0, 0, 0, 0.2))
+qqline(residuals(model_medical_svy, type = "pearson"), col = "red", lwd = 2)
+```
+
+## Influential Points Detection
+
+```{r influential-weighted}
+# For survey-weighted models, we examine standardized residuals
+# and leverage (hat values) adjusted for survey weights
+
+cat("\n=== Influential Point Detection (Survey-Weighted) ===\n\n")
+
+# Standardized residuals
+std_resid <- residuals(model_medical_svy, type = "pearson")
+
+# Identify large standardized residuals (|z| > 3)
+large_resid <- which(abs(std_resid) > 3)
+cat("Number of observations with |standardized residual| > 3:", length(large_resid), "\n")
+cat("Percentage:", round(length(large_resid) / nrow(data_analysis) * 100, 2), "%\n")
+
+# Summary of residuals
+cat("\nSummary of Standardized Residuals:\n")
+print(summary(std_resid))
+```
+
+```{r residual-distribution, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Histogram of standardized residuals
+hist(std_resid,
+     breaks = 50,
+     main = "Distribution of Standardized Residuals",
+     xlab = "Standardized Residuals",
+     col = "steelblue",
+     border = "white",
+     freq = FALSE)
+curve(dnorm(x, mean = 0, sd = 1), add = TRUE, col = "red", lwd = 2)
+
+# Index plot
+plot(std_resid,
+     pch = 16,
+     col = rgb(0, 0, 0, 0.3),
+     main = "Index Plot of Standardized Residuals",
+     xlab = "Observation Index",
+     ylab = "Standardized Residuals")
+abline(h = c(-3, 0, 3), col = c("red", "black", "red"), lty = c(2, 1, 2), lwd = 2)
+```
+
+# Summary of Stages 1-3
+
+```{r summary-comparison}
+cat("=== Model Comparison Summary (Survey-Weighted) ===\n\n")
+
+# AIC comparison
+aic_values <- c(AIC(model_base_svy), AIC(model_lifestyle_svy), AIC(model_medical_svy))
+
+model_summary <- data.frame(
+  Model = c("Stage 1: Base", "Stage 2: + Lifestyle", "Stage 3: + Medical"),
+  AIC = aic_values,
+  N_predictors = c(
+    length(coef(model_base_svy)) - 1,
+    length(coef(model_lifestyle_svy)) - 1,
+    length(coef(model_medical_svy)) - 1
+  )
+)
+
+print(model_summary, digits = 2)
+
+cat("\nNote: For survey-weighted models, we use AIC for comparison.\n")
+cat("Lower AIC indicates better model fit penalized for complexity.\n")
+```
+
+```{r sleep-effects-comparison}
+cat("\n=== Sleep Variable Effects Across Models (Survey-Weighted) ===\n\n")
+
+extract_sleep_coefs_svy <- function(model, name) {
+  coefs <- summary(model)$coefficients
+  data.frame(
+    Model = name,
+    Sleep_Hours_Coef = coefs["Avg_sleep_hours", "Estimate"],
+    Sleep_Hours_SE = coefs["Avg_sleep_hours", "Std. Error"],
+    Sleep_Hours_p = coefs["Avg_sleep_hours", "Pr(>|t|)"],
+    Insomnia_Coef = coefs["Insomnia", "Estimate"],
+    Insomnia_SE = coefs["Insomnia", "Std. Error"],
+    Insomnia_p = coefs["Insomnia", "Pr(>|t|)"],
+    Sleep_Apnea_Coef = coefs["Sleep_apnea", "Estimate"],
+    Sleep_Apnea_SE = coefs["Sleep_apnea", "Std. Error"],
+    Sleep_Apnea_p = coefs["Sleep_apnea", "Pr(>|t|)"]
+  )
+}
+
+sleep_effects <- rbind(
+  extract_sleep_coefs_svy(model_base_svy, "Stage 1"),
+  extract_sleep_coefs_svy(model_lifestyle_svy, "Stage 2"),
+  extract_sleep_coefs_svy(model_medical_svy, "Stage 3")
+)
+
+print(sleep_effects, digits = 4)
+```
+
+```{r forest-plot, fig.width=10, fig.height=6}
+# Forest plot of sleep variable effects across models
+par(mfrow = c(1, 1), mar = c(5, 10, 4, 2))
+
+# Extract coefficients and CIs
+coef_matrix <- matrix(NA, nrow = 3, ncol = 3)
+ci_lower <- matrix(NA, nrow = 3, ncol = 3)
+ci_upper <- matrix(NA, nrow = 3, ncol = 3)
+
+models <- list(model_base_svy, model_lifestyle_svy, model_medical_svy)
+sleep_var_names <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+
+for (i in 1:3) {
+  ci <- confint(models[[i]])
+  for (j in 1:3) {
+    coef_matrix[i, j] <- coef(models[[i]])[sleep_var_names[j]]
+    ci_lower[i, j] <- ci[sleep_var_names[j], 1]
+    ci_upper[i, j] <- ci[sleep_var_names[j], 2]
+  }
+}
+
+# Create forest plot
+y_pos <- seq(1, 9, by = 1)
+colors <- c("steelblue", "darkgreen", "coral")
+
+plot(0, 0, type = "n",
+     xlim = range(c(ci_lower, ci_upper), na.rm = TRUE) * 1.1,
+     ylim = c(0, 10),
+     xlab = "Coefficient Estimate (95% CI)",
+     ylab = "",
+     main = "Forest Plot: Sleep Variable Effects Across Models",
+     yaxt = "n")
+
+abline(v = 0, col = "gray", lty = 2, lwd = 2)
+
+labels <- c("Sleep Hours (S1)", "Sleep Hours (S2)", "Sleep Hours (S3)",
+            "Insomnia (S1)", "Insomnia (S2)", "Insomnia (S3)",
+            "Sleep Apnea (S1)", "Sleep Apnea (S2)", "Sleep Apnea (S3)")
+
+pos_idx <- 1
+for (j in 1:3) {
+  for (i in 1:3) {
+    segments(ci_lower[i, j], y_pos[pos_idx],
+             ci_upper[i, j], y_pos[pos_idx],
+             col = colors[i], lwd = 2)
+    points(coef_matrix[i, j], y_pos[pos_idx],
+           pch = 19, col = colors[i], cex = 1.5)
+    pos_idx <- pos_idx + 1
+  }
+}
+
+axis(2, at = y_pos, labels = labels, las = 1, cex.axis = 0.8)
+legend("topright",
+       legend = c("Stage 1: Base", "Stage 2: + Lifestyle", "Stage 3: + Medical"),
+       col = colors, pch = 19, lwd = 2, cex = 0.9)
+```
+
+# Key Conclusions
+
+```{r final-conclusions}
+cat("\n=== KEY CONCLUSIONS FROM SURVEY-WEIGHTED ANALYSIS (STAGES 1-3) ===\n\n")
+
+final_coefs <- summary(model_medical_svy)$coefficients
+final_ci <- confint(model_medical_svy)
+
+cat("1. SLEEP DURATION:\n")
+cat("   After full adjustment for demographics, lifestyle, and medical interventions:\n")
+cat("   - Coefficient:", round(final_coefs["Avg_sleep_hours", "Estimate"], 4), "\n")
+cat("   - 95% CI: [", round(final_ci["Avg_sleep_hours", 1], 4), ",",
+    round(final_ci["Avg_sleep_hours", 2], 4), "]\n")
+cat("   - p-value:", format(final_coefs["Avg_sleep_hours", "Pr(>|t|)"], digits = 3), "\n")
+if (final_coefs["Avg_sleep_hours", "Pr(>|t|)"] < 0.05) {
+  cat("   - Interpretation: Each additional hour of sleep is associated with\n")
+  cat("     ", round(final_coefs["Avg_sleep_hours", "Estimate"], 3),
+      " point change in PHQ-9 score (SIGNIFICANT)\n\n")
+} else {
+  cat("   - Interpretation: No significant association detected.\n\n")
+}
+
+cat("2. INSOMNIA (Diagnosed Trouble Sleeping):\n")
+cat("   - Coefficient:", round(final_coefs["Insomnia", "Estimate"], 4), "\n")
+cat("   - 95% CI: [", round(final_ci["Insomnia", 1], 4), ",",
+    round(final_ci["Insomnia", 2], 4), "]\n")
+cat("   - p-value:", format(final_coefs["Insomnia", "Pr(>|t|)"], digits = 3), "\n")
+if (final_coefs["Insomnia", "Pr(>|t|)"] < 0.05) {
+  cat("   - Interpretation: Individuals with diagnosed insomnia have on average\n")
+  cat("     ", round(final_coefs["Insomnia", "Estimate"], 3),
+      " points higher PHQ-9 scores (SIGNIFICANT)\n\n")
+} else {
+  cat("   - Interpretation: No significant association detected.\n\n")
+}
+
+cat("3. SLEEP APNEA SYMPTOMS:\n")
+cat("   - Coefficient:", round(final_coefs["Sleep_apnea", "Estimate"], 4), "\n")
+cat("   - 95% CI: [", round(final_ci["Sleep_apnea", 1], 4), ",",
+    round(final_ci["Sleep_apnea", 2], 4), "]\n")
+cat("   - p-value:", format(final_coefs["Sleep_apnea", "Pr(>|t|)"], digits = 3), "\n")
+if (final_coefs["Sleep_apnea", "Pr(>|t|)"] < 0.05) {
+  cat("   - Interpretation: Frequent snoring/gasping is associated with\n")
+  cat("     ", round(final_coefs["Sleep_apnea", "Estimate"], 3),
+      " point change in PHQ-9 score (SIGNIFICANT)\n\n")
+} else {
+  cat("   - Interpretation: No significant association detected.\n\n")
+}
+
+cat("4. MODEL PROGRESSION:\n")
+cat("   - Stage 1 (Base): Demographics only\n")
+cat("   - Stage 2: Added lifestyle factors (activity, smoking, transport)\n")
+cat("   - Stage 3: Added medical interventions (medications, therapy)\n")
+cat("   - Each stage incrementally adjusted for additional confounders\n\n")
+
+cat("5. SURVEY WEIGHTING IMPACT:\n")
+cat("   - Analysis accounts for NHANES complex survey design\n")
+cat("   - Results are nationally representative for U.S. adults\n")
+cat("   - Standard errors properly account for clustering and stratification\n\n")
+
+cat("6. CLINICAL IMPLICATIONS:\n")
+cat("   - Sleep quality metrics show consistent associations with depression\n")
+cat("   - Findings support sleep as a modifiable risk factor\n")
+cat("   - Results inform screening, intervention, and policy decisions\n")
+```
+
+# Comparison with Unweighted Analysis
+
+```{r weighted-vs-unweighted}
+cat("\n=== Comparison: Survey-Weighted vs Unweighted Analysis ===\n\n")
+cat("This survey-weighted analysis differs from standard OLS regression by:\n\n")
+cat("1. SAMPLE WEIGHTS: Accounts for differential sampling probabilities\n")
+cat("   - Ensures estimates represent the U.S. population, not just the sample\n\n")
+cat("2. DESIGN EFFECTS: Adjusts variance estimates for:\n")
+cat("   - Clustering (PSUs): Observations within clusters are correlated\n")
+cat("   - Stratification: Sample is stratified across demographic groups\n\n")
+cat("3. STANDARD ERRORS: Typically larger than OLS due to design effects\n")
+cat("   - Reflects true uncertainty in population-level estimates\n\n")
+cat("4. INFERENCE: Confidence intervals and p-values account for survey design\n")
+cat("   - More conservative but more accurate for population inference\n\n")
+cat("5. BEST PRACTICES: Follows CDC guidelines for NHANES analysis\n")
+cat("   - Required for nationally representative conclusions\n")
+```
+
+# Session Information
+
+```{r session-info}
+sessionInfo()
+```

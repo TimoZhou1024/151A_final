@@ -1,5 +1,775 @@
-# 151A_final_report
+---
+title: "Studying the Association Between Sleep and Depression Outcomes"
+author: "Tianyun Jiang, Siyuan Zhou, Ethan Hardcastle"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+This analysis examines the association between sleep and depression outcomes among U.S. adults using NHANES 2017-2020 ("Pre-Pandemic") data. We investigate how sleep duration and sleep trouble (snoring, gasping, diagnosed sleep disorders) relate to depressive symptom severity (PHQ-9 total score), after adjusting for demographics, lifestyle factors, and medical interventions.
+
+# Data Loading and Preparation
+
+```{r load-packages}
+# Load required packages
+library(tidyverse)
+library(car)       # For VIF and diagnostic tests
+library(lmtest)    # For Breusch-Pagan test
+library(MASS)      # For robust regression
+library(broom)     # For tidy model outputs
+library(gridExtra) # For arranging plots
+```
+
+```{r load-data}
+# Load the processed dataset
+data <- read.csv("dataset2_processed_zero.csv")
+
+# Display basic information
+cat("Dataset dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
+```
+
+```{r create-response}
+# Create PHQ-9 total score (sum of 9 depression items, each scored 0-3)
+# Items: DPQ010-DPQ090 correspond to 9 depression screening questions
+phq9_items <- c("Little_interest_or_pleasure_in_doing_things",
+                "Feeling_down_depressed_or_hopeless",
+                "Trouble_sleeping_or_sleeping_too_much",
+                "Feeling_tired_or_having_little_energy",
+                "Poor_appetite_or_overeating",
+                "Feeling_bad_about_yourself_or_failure",
+                "Trouble_concentrating",
+                "Moving_speaking_slowly_or_being_fidgety_restless",
+                "Thoughts_of_being_better_off_dead_self_harm")
+
+# Calculate PHQ-9 total score
+data$PHQ9_total <- rowSums(data[, phq9_items], na.rm = FALSE)
+
+# Summary of PHQ-9 scores
+cat("\nPHQ-9 Total Score Summary:\n")
+summary(data$PHQ9_total)
+```
+
+```{r create-sleep-variables}
+# Create average sleep duration (combining weekday and weekend sleep)
+data$Avg_sleep_hours <- (data$Hours_of_sleep_on_weekdays_workdays +
+                          data$Hours_of_sleep_on_weekends_non_workdays) / 2
+
+# Create binary insomnia indicator (ever told by doctor about trouble sleeping)
+# Coding: 1 = Yes, 2 = No, so we convert to binary (1 = Yes insomnia, 0 = No)
+data$Insomnia <- ifelse(data$Ever_told_by_a_doctor_professional_you_had_trouble_sleeping == 1, 1, 0)
+
+# Create sleep apnea indicator based on snoring and gasping frequency
+# Higher values indicate more frequent symptoms (0 = never, higher = more frequent)
+# We create binary: 1 if frequent snoring OR frequent gasping
+data$Sleep_apnea <- ifelse(data$How_often_do_you_snore >= 3 |
+                            data$How_often_snort_gasp_or_stop_breathing_during_sleep >= 3, 1, 0)
+
+cat("Sleep Variables Created:\n")
+cat("Average Sleep Hours Summary:\n")
+summary(data$Avg_sleep_hours)
+cat("\nInsomnia prevalence:", mean(data$Insomnia, na.rm = TRUE) * 100, "%\n")
+cat("Sleep Apnea prevalence:", mean(data$Sleep_apnea, na.rm = TRUE) * 100, "%\n")
+```
+
+```{r prepare-covariates}
+# Prepare demographic covariates
+# Sex: 1 = Male, 2 = Female -> convert to factor
+data$Sex <- factor(data$Sex, levels = c(1, 2), labels = c("Male", "Female"))
+
+# Race/Hispanic origin: convert to factor
+data$Race <- factor(data$Race_Hispanic_origin)
+
+# Age is continuous
+# Family income-to-poverty ratio is continuous
+
+# Physical fitness proxy: BMI
+# Note: We'll also use Weight as an alternative measure
+
+cat("\nDemographic Variables Summary:\n")
+cat("Sex distribution:\n")
+table(data$Sex)
+cat("\nAge summary:\n")
+summary(data$Age_in_years_at_screening)
+cat("\nFamily Income-to-Poverty Ratio summary:\n")
+summary(data$Family_income_to_poverty_ratio)
+```
+
+```{r filter-valid-data}
+# Filter to adults (18+) with valid PHQ-9 scores and sleep data
+# Also exclude rows where key sleep variables have NA indicators = 1
+
+data_analysis <- data %>%
+  filter(Age_in_years_at_screening >= 18,
+         !is.na(PHQ9_total),
+         !is.na(Avg_sleep_hours),
+         Hours_of_sleep_on_weekdays_workdays_NA_indicator == 0,
+         Hours_of_sleep_on_weekends_non_workdays_NA_indicator == 0)
+
+cat("Analysis sample size:", nrow(data_analysis), "\n")
+cat("Age range:", min(data_analysis$Age_in_years_at_screening), "-",
+    max(data_analysis$Age_in_years_at_screening), "\n")
+```
+
+# Stage 1: Base Model
+
+In Stage 1, we use the PHQ-9 total score as the response variable. The main regressors are:
+
+- **Average sleep duration** (average of weekday and weekend sleep hours)
+- **Insomnia** (binary: ever told by doctor about trouble sleeping)
+- **Sleep apnea indicators** (binary: frequent snoring or gasping)
+
+Covariates include gender, race, age, family income-to-poverty ratio, and BMI (as a proxy for physical fitness).
+
+## Exploratory Data Analysis
+
+```{r eda-phq9, fig.width=10, fig.height=4}
+# Distribution of PHQ-9 scores
+par(mfrow = c(1, 2))
+
+hist(data_analysis$PHQ9_total,
+     breaks = 28,
+     main = "Distribution of PHQ-9 Total Score",
+     xlab = "PHQ-9 Total Score (0-27)",
+     col = "steelblue",
+     border = "white")
+
+# Sleep duration distribution
+hist(data_analysis$Avg_sleep_hours,
+     breaks = 20,
+     main = "Distribution of Average Sleep Hours",
+     xlab = "Average Sleep Hours",
+     col = "darkgreen",
+     border = "white")
+```
+
+```{r eda-bivariate, fig.width=10, fig.height=5}
+# Bivariate relationships
+par(mfrow = c(1, 2))
+
+# Sleep duration vs PHQ-9 with LOESS
+plot(data_analysis$Avg_sleep_hours, data_analysis$PHQ9_total,
+     pch = 16, col = rgb(0, 0, 0, 0.1),
+     xlab = "Average Sleep Hours",
+     ylab = "PHQ-9 Total Score",
+     main = "Sleep Duration vs Depression Severity")
+loess_fit <- loess(PHQ9_total ~ Avg_sleep_hours, data = data_analysis)
+sleep_seq <- seq(min(data_analysis$Avg_sleep_hours, na.rm = TRUE),
+                 max(data_analysis$Avg_sleep_hours, na.rm = TRUE),
+                 length.out = 100)
+lines(sleep_seq, predict(loess_fit, data.frame(Avg_sleep_hours = sleep_seq)),
+      col = "red", lwd = 2)
+
+# Boxplot by insomnia status
+boxplot(PHQ9_total ~ Insomnia, data = data_analysis,
+        names = c("No Insomnia", "Insomnia"),
+        xlab = "Insomnia Status",
+        ylab = "PHQ-9 Total Score",
+        main = "PHQ-9 by Insomnia Status",
+        col = c("lightblue", "salmon"))
+```
+
+```{r eda-correlation}
+# Correlation matrix for continuous predictors
+continuous_vars <- c("PHQ9_total", "Avg_sleep_hours", "Age_in_years_at_screening",
+                     "Family_income_to_poverty_ratio", "Body_mass_index")
+cor_matrix <- cor(data_analysis[, continuous_vars], use = "complete.obs")
+cat("Correlation Matrix:\n")
+round(cor_matrix, 3)
+```
+
+## Base Model Fitting
+
+```{r base-model}
+# Fit the base model
+# Response: PHQ-9 total score
+# Main regressors: Average sleep hours, Insomnia, Sleep apnea
+# Covariates: Sex, Race, Age, Income-to-poverty ratio, BMI
+
+model_base <- lm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                   Sex + Race + Age_in_years_at_screening +
+                   Family_income_to_poverty_ratio + Body_mass_index,
+                 data = data_analysis)
+
+cat("=== Base Model Summary ===\n\n")
+summary(model_base)
+```
+
+## NLM Assumption Checking
+
+### Linearity and Homoscedasticity
+
+```{r assumption-residuals, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Residuals vs Fitted plot
+plot(model_base, which = 1, main = "Residuals vs Fitted")
+
+# Scale-Location plot
+plot(model_base, which = 3, main = "Scale-Location")
+```
+
+```{r bp-test}
+# Breusch-Pagan test for heteroscedasticity
+bp_test <- bptest(model_base)
+cat("Breusch-Pagan Test for Heteroscedasticity:\n")
+print(bp_test)
+
+if (bp_test$p.value < 0.05) {
+  cat("\nConclusion: Evidence of heteroscedasticity (p < 0.05).\n")
+  cat("We will use heteroscedasticity-robust standard errors.\n")
+} else {
+  cat("\nConclusion: No strong evidence of heteroscedasticity.\n")
+}
+```
+
+### Normality of Residuals
+
+```{r assumption-normality, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Q-Q plot
+plot(model_base, which = 2, main = "Normal Q-Q Plot")
+
+# Histogram of residuals
+hist(residuals(model_base),
+     breaks = 50,
+     main = "Distribution of Residuals",
+     xlab = "Residuals",
+     col = "steelblue",
+     border = "white",
+     freq = FALSE)
+curve(dnorm(x, mean = 0, sd = sd(residuals(model_base))),
+      add = TRUE, col = "red", lwd = 2)
+```
+
+```{r shapiro-test}
+# Shapiro-Wilk test (on a sample due to size limitations)
+set.seed(151)
+sample_residuals <- sample(residuals(model_base), min(5000, length(residuals(model_base))))
+shapiro_test <- shapiro.test(sample_residuals)
+cat("Shapiro-Wilk Test for Normality (sample of residuals):\n")
+print(shapiro_test)
+```
+
+### Multicollinearity Check
+
+```{r vif-check}
+# Variance Inflation Factors
+vif_values <- vif(model_base)
+cat("Variance Inflation Factors:\n")
+print(vif_values)
+
+max_vif <- max(vif_values[!is.nan(vif_values)])
+if (max_vif > 5) {
+  cat("\nWarning: Some VIF values > 5, indicating potential multicollinearity.\n")
+} else {
+  cat("\nAll VIF values < 5, no serious multicollinearity detected.\n")
+}
+```
+
+## Addressing Non-Normality
+
+Given that PHQ-9 scores are count data (0-27) with a right-skewed distribution, we consider transformations and alternative approaches.
+
+```{r log-transformation}
+# Try log transformation of response (adding 1 to handle zeros)
+data_analysis$PHQ9_log <- log(data_analysis$PHQ9_total + 1)
+
+model_base_log <- lm(PHQ9_log ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                       Sex + Race + Age_in_years_at_screening +
+                       Family_income_to_poverty_ratio + Body_mass_index,
+                     data = data_analysis)
+
+cat("=== Base Model with Log-Transformed Response ===\n\n")
+summary(model_base_log)
+```
+
+```{r log-diagnostics, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+plot(model_base_log, which = 1, main = "Residuals vs Fitted (Log Model)")
+plot(model_base_log, which = 2, main = "Q-Q Plot (Log Model)")
+```
+
+## Robust Standard Errors
+
+```{r robust-se}
+# Calculate heteroscedasticity-robust standard errors
+library(sandwich)
+robust_se <- sqrt(diag(vcovHC(model_base, type = "HC1")))
+
+cat("=== Comparison of Standard Errors ===\n\n")
+comparison <- data.frame(
+  Coefficient = names(coef(model_base)),
+  Estimate = coef(model_base),
+  OLS_SE = summary(model_base)$coefficients[, 2],
+  Robust_SE = robust_se
+)
+print(comparison, digits = 4)
+```
+
+## Base Model Interpretation
+
+```{r base-interpretation}
+cat("=== Key Findings from Base Model ===\n\n")
+
+# Extract coefficients for main sleep variables
+coefs <- summary(model_base)$coefficients
+
+cat("Sleep Variables Effects on PHQ-9 Score:\n\n")
+
+cat("1. Average Sleep Hours:\n")
+cat("   Coefficient:", round(coefs["Avg_sleep_hours", "Estimate"], 4), "\n")
+cat("   p-value:", format(coefs["Avg_sleep_hours", "Pr(>|t|)"], scientific = TRUE), "\n")
+if (coefs["Avg_sleep_hours", "Pr(>|t|)"] < 0.05) {
+  if (coefs["Avg_sleep_hours", "Estimate"] < 0) {
+    cat("   Interpretation: More sleep is associated with LOWER depression scores.\n\n")
+  } else {
+    cat("   Interpretation: More sleep is associated with HIGHER depression scores.\n\n")
+  }
+}
+
+cat("2. Insomnia (diagnosed trouble sleeping):\n")
+cat("   Coefficient:", round(coefs["Insomnia", "Estimate"], 4), "\n")
+cat("   p-value:", format(coefs["Insomnia", "Pr(>|t|)"], scientific = TRUE), "\n")
+if (coefs["Insomnia", "Pr(>|t|)"] < 0.05) {
+  cat("   Interpretation: Having diagnosed insomnia is associated with",
+      round(coefs["Insomnia", "Estimate"], 2), "point increase in PHQ-9.\n\n")
+}
+
+cat("3. Sleep Apnea (frequent snoring/gasping):\n")
+cat("   Coefficient:", round(coefs["Sleep_apnea", "Estimate"], 4), "\n")
+cat("   p-value:", format(coefs["Sleep_apnea", "Pr(>|t|)"], scientific = TRUE), "\n")
+
+cat("\nModel R-squared:", round(summary(model_base)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(model_base)$adj.r.squared, 4), "\n")
+```
+
+## Outlier and Influential Point Detection (Stage 1)
+
+```{r outlier-detection-s1, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Cook's Distance
+plot(model_base, which = 4, main = "Cook's Distance")
+
+# Residuals vs Leverage
+plot(model_base, which = 5, main = "Residuals vs Leverage")
+```
+
+```{r influential-points-s1}
+# Identify influential points
+cooks_d <- cooks.distance(model_base)
+influential_threshold <- 4 / nrow(data_analysis)
+
+influential_points <- which(cooks_d > influential_threshold)
+cat("Number of potentially influential points (Cook's D >",
+    round(influential_threshold, 5), "):", length(influential_points), "\n")
+cat("Percentage:", round(length(influential_points) / nrow(data_analysis) * 100, 2), "%\n")
+
+# High leverage points
+leverage <- hatvalues(model_base)
+p <- length(coef(model_base))
+n <- nrow(data_analysis)
+high_leverage <- which(leverage > 2 * p / n)
+cat("\nNumber of high leverage points:", length(high_leverage), "\n")
+```
+
+# Stage 2: Adding Lifestyle Covariates
+
+In Stage 2, we expand the base model by adding lifestyle variables:
+
+- Work activity intensity (vigorous and moderate)
+- Recreational activity intensity
+- Transportation mode (walk/bicycle)
+- Secondhand smoke exposure
+
+```{r stage2-model}
+# Fit model with lifestyle covariates
+model_lifestyle <- lm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                        Sex + Race + Age_in_years_at_screening +
+                        Family_income_to_poverty_ratio + Body_mass_index +
+                        # Lifestyle covariates
+                        Work_vigorous_intensity_activity +
+                        Work_moderate_intensity_activity +
+                        Transport_walk_or_bicycle +
+                        Recreation_vigorous_intensity_activity +
+                        Secondhand_smoke_exposure_at_home,
+                      data = data_analysis)
+
+cat("=== Stage 2: Model with Lifestyle Covariates ===\n\n")
+summary(model_lifestyle)
+```
+
+```{r model-comparison-s2}
+# Compare models using ANOVA
+cat("=== Model Comparison: Base vs Lifestyle ===\n\n")
+anova_test <- anova(model_base, model_lifestyle)
+print(anova_test)
+
+if (anova_test$`Pr(>F)`[2] < 0.05) {
+  cat("\nConclusion: Lifestyle covariates significantly improve model fit (p < 0.05).\n")
+} else {
+  cat("\nConclusion: Lifestyle covariates do not significantly improve model fit.\n")
+}
+```
+
+## Interaction Effects: Lifestyle × Sleep Variables
+
+```{r interaction-lifestyle-sleep}
+# Test interactions between lifestyle variables and sleep quality variables
+
+# Interaction: Physical activity × Sleep duration
+model_interact_activity <- lm(PHQ9_total ~ Avg_sleep_hours * Recreation_vigorous_intensity_activity +
+                                Insomnia + Sleep_apnea +
+                                Sex + Race + Age_in_years_at_screening +
+                                Family_income_to_poverty_ratio + Body_mass_index +
+                                Work_vigorous_intensity_activity +
+                                Work_moderate_intensity_activity +
+                                Transport_walk_or_bicycle +
+                                Secondhand_smoke_exposure_at_home,
+                              data = data_analysis)
+
+cat("=== Interaction: Sleep Duration × Recreation Activity ===\n\n")
+summary(model_interact_activity)$coefficients[
+  grepl(":", rownames(summary(model_interact_activity)$coefficients)), ]
+```
+
+```{r interaction-smoke-sleep}
+# Interaction: Smoking exposure × Insomnia
+model_interact_smoke <- lm(PHQ9_total ~ Avg_sleep_hours +
+                             Insomnia * Secondhand_smoke_exposure_at_home +
+                             Sleep_apnea +
+                             Sex + Race + Age_in_years_at_screening +
+                             Family_income_to_poverty_ratio + Body_mass_index +
+                             Work_vigorous_intensity_activity +
+                             Work_moderate_intensity_activity +
+                             Transport_walk_or_bicycle +
+                             Recreation_vigorous_intensity_activity,
+                           data = data_analysis)
+
+cat("\n=== Interaction: Insomnia × Secondhand Smoke Exposure ===\n\n")
+summary(model_interact_smoke)$coefficients[
+  grepl(":", rownames(summary(model_interact_smoke)$coefficients)), ]
+```
+
+```{r interaction-transport-sleep}
+# Interaction: Active transport × Sleep quality
+model_interact_transport <- lm(PHQ9_total ~ Avg_sleep_hours * Transport_walk_or_bicycle +
+                                 Insomnia + Sleep_apnea +
+                                 Sex + Race + Age_in_years_at_screening +
+                                 Family_income_to_poverty_ratio + Body_mass_index +
+                                 Work_vigorous_intensity_activity +
+                                 Work_moderate_intensity_activity +
+                                 Recreation_vigorous_intensity_activity +
+                                 Secondhand_smoke_exposure_at_home,
+                               data = data_analysis)
+
+cat("\n=== Interaction: Sleep Duration × Active Transport ===\n\n")
+summary(model_interact_transport)$coefficients[
+  grepl(":", rownames(summary(model_interact_transport)$coefficients)), ]
+```
+
+```{r joint-interaction-test-s2}
+# Joint F-test for all lifestyle × sleep interactions
+model_full_interact_lifestyle <- lm(PHQ9_total ~
+                                      Avg_sleep_hours * (Recreation_vigorous_intensity_activity +
+                                                          Work_vigorous_intensity_activity +
+                                                          Transport_walk_or_bicycle) +
+                                      Insomnia * Secondhand_smoke_exposure_at_home +
+                                      Sleep_apnea +
+                                      Sex + Race + Age_in_years_at_screening +
+                                      Family_income_to_poverty_ratio + Body_mass_index +
+                                      Work_moderate_intensity_activity,
+                                    data = data_analysis)
+
+cat("\n=== Joint Test: All Lifestyle × Sleep Interactions ===\n\n")
+anova(model_lifestyle, model_full_interact_lifestyle)
+```
+
+## Stage 2 Diagnostics
+
+```{r diagnostics-s2, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+plot(model_lifestyle, which = 1, main = "Residuals vs Fitted (Stage 2)")
+plot(model_lifestyle, which = 2, main = "Q-Q Plot (Stage 2)")
+```
+
+```{r vif-s2}
+cat("=== VIF for Stage 2 Model ===\n")
+vif_s2 <- vif(model_lifestyle)
+print(vif_s2)
+```
+
+```{r influential-s2, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+plot(model_lifestyle, which = 4, main = "Cook's Distance (Stage 2)")
+plot(model_lifestyle, which = 5, main = "Residuals vs Leverage (Stage 2)")
+
+cooks_d_s2 <- cooks.distance(model_lifestyle)
+influential_s2 <- which(cooks_d_s2 > influential_threshold)
+cat("\nInfluential points in Stage 2 model:", length(influential_s2), "\n")
+```
+
+# Stage 3: Adding Medical Intervention Covariates
+
+In Stage 3, we add variables tracking medical interventions:
+
+- Whether taking prescription medicines
+- Number of prescription medicines
+- Whether seen/talked to a mental health professional
+
+```{r stage3-model}
+# Fit model with medical intervention covariates
+model_medical <- lm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                      Sex + Race + Age_in_years_at_screening +
+                      Family_income_to_poverty_ratio + Body_mass_index +
+                      # Lifestyle covariates
+                      Work_vigorous_intensity_activity +
+                      Work_moderate_intensity_activity +
+                      Transport_walk_or_bicycle +
+                      Recreation_vigorous_intensity_activity +
+                      Secondhand_smoke_exposure_at_home +
+                      # Medical intervention covariates
+                      Took_any_prescription_medicine +
+                      Number_of_prescription_medicines +
+                      Seen_talked_to_a_mental_health_professional,
+                    data = data_analysis)
+
+cat("=== Stage 3: Model with Medical Intervention Covariates ===\n\n")
+summary(model_medical)
+```
+
+```{r model-comparison-s3}
+# Compare models
+cat("=== Model Comparison: Lifestyle vs Medical ===\n\n")
+anova_test_s3 <- anova(model_lifestyle, model_medical)
+print(anova_test_s3)
+
+if (anova_test_s3$`Pr(>F)`[2] < 0.05) {
+  cat("\nConclusion: Medical intervention covariates significantly improve model fit.\n")
+}
+```
+
+## Interaction Effects: Medical Intervention × Sleep Variables
+
+```{r interaction-meds-sleep}
+# Interaction: Prescription medicines × Sleep variables
+model_interact_meds <- lm(PHQ9_total ~ Avg_sleep_hours * Took_any_prescription_medicine +
+                            Insomnia * Took_any_prescription_medicine +
+                            Sleep_apnea +
+                            Sex + Race + Age_in_years_at_screening +
+                            Family_income_to_poverty_ratio + Body_mass_index +
+                            Work_vigorous_intensity_activity +
+                            Work_moderate_intensity_activity +
+                            Transport_walk_or_bicycle +
+                            Recreation_vigorous_intensity_activity +
+                            Secondhand_smoke_exposure_at_home +
+                            Number_of_prescription_medicines +
+                            Seen_talked_to_a_mental_health_professional,
+                          data = data_analysis)
+
+cat("=== Interaction: Sleep Variables × Prescription Medicine Use ===\n\n")
+interact_coefs <- summary(model_interact_meds)$coefficients
+print(interact_coefs[grepl(":", rownames(interact_coefs)), ])
+```
+
+```{r interaction-therapy-sleep}
+# Interaction: Mental health professional × Sleep variables
+model_interact_therapy <- lm(PHQ9_total ~ Avg_sleep_hours * Seen_talked_to_a_mental_health_professional +
+                               Insomnia * Seen_talked_to_a_mental_health_professional +
+                               Sleep_apnea +
+                               Sex + Race + Age_in_years_at_screening +
+                               Family_income_to_poverty_ratio + Body_mass_index +
+                               Work_vigorous_intensity_activity +
+                               Work_moderate_intensity_activity +
+                               Transport_walk_or_bicycle +
+                               Recreation_vigorous_intensity_activity +
+                               Secondhand_smoke_exposure_at_home +
+                               Took_any_prescription_medicine +
+                               Number_of_prescription_medicines,
+                             data = data_analysis)
+
+cat("\n=== Interaction: Sleep Variables × Mental Health Professional ===\n\n")
+interact_coefs_therapy <- summary(model_interact_therapy)$coefficients
+print(interact_coefs_therapy[grepl(":", rownames(interact_coefs_therapy)), ])
+```
+
+```{r joint-interaction-test-s3}
+# Joint F-test for medical × sleep interactions
+model_full_interact_medical <- lm(PHQ9_total ~
+                                    Avg_sleep_hours * (Took_any_prescription_medicine +
+                                                        Seen_talked_to_a_mental_health_professional) +
+                                    Insomnia * (Took_any_prescription_medicine +
+                                                  Seen_talked_to_a_mental_health_professional) +
+                                    Sleep_apnea +
+                                    Sex + Race + Age_in_years_at_screening +
+                                    Family_income_to_poverty_ratio + Body_mass_index +
+                                    Work_vigorous_intensity_activity +
+                                    Work_moderate_intensity_activity +
+                                    Transport_walk_or_bicycle +
+                                    Recreation_vigorous_intensity_activity +
+                                    Secondhand_smoke_exposure_at_home +
+                                    Number_of_prescription_medicines,
+                                  data = data_analysis)
+
+cat("\n=== Joint Test: All Medical × Sleep Interactions ===\n\n")
+anova(model_medical, model_full_interact_medical)
+```
+
+## Stage 3 Diagnostics
+
+```{r diagnostics-s3, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+plot(model_medical, which = 1, main = "Residuals vs Fitted (Stage 3)")
+plot(model_medical, which = 2, main = "Q-Q Plot (Stage 3)")
+```
+
+```{r vif-s3}
+cat("=== VIF for Stage 3 Model ===\n")
+vif_s3 <- vif(model_medical)
+print(vif_s3)
+```
+
+```{r influential-s3, fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+plot(model_medical, which = 4, main = "Cook's Distance (Stage 3)")
+plot(model_medical, which = 5, main = "Residuals vs Leverage (Stage 3)")
+
+cooks_d_s3 <- cooks.distance(model_medical)
+influential_s3 <- which(cooks_d_s3 > influential_threshold)
+cat("\nInfluential points in Stage 3 model:", length(influential_s3), "\n")
+```
+
+## Robustness Check: Model Without Influential Points
+
+```{r robust-model-s3}
+# Remove highly influential points and refit
+highly_influential <- which(cooks_d_s3 > 4 * influential_threshold)
+cat("Removing", length(highly_influential), "highly influential points for robustness check.\n\n")
+
+if (length(highly_influential) > 0) {
+  data_robust <- data_analysis[-highly_influential, ]
+
+  model_medical_robust <- lm(PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                               Sex + Race + Age_in_years_at_screening +
+                               Family_income_to_poverty_ratio + Body_mass_index +
+                               Work_vigorous_intensity_activity +
+                               Work_moderate_intensity_activity +
+                               Transport_walk_or_bicycle +
+                               Recreation_vigorous_intensity_activity +
+                               Secondhand_smoke_exposure_at_home +
+                               Took_any_prescription_medicine +
+                               Number_of_prescription_medicines +
+                               Seen_talked_to_a_mental_health_professional,
+                             data = data_robust)
+
+  cat("=== Coefficient Comparison: Original vs Robust ===\n\n")
+  comparison_robust <- data.frame(
+    Variable = names(coef(model_medical)),
+    Original = coef(model_medical),
+    Robust = coef(model_medical_robust),
+    Pct_Change = round((coef(model_medical_robust) - coef(model_medical)) /
+                         abs(coef(model_medical)) * 100, 2)
+  )
+  print(comparison_robust)
+}
+```
+
+# Summary of Stages 1-3
+
+```{r summary-table}
+# Create summary comparison table
+cat("=== Model Comparison Summary ===\n\n")
+
+model_summary <- data.frame(
+  Model = c("Stage 1: Base", "Stage 2: + Lifestyle", "Stage 3: + Medical"),
+  R_squared = c(summary(model_base)$r.squared,
+                summary(model_lifestyle)$r.squared,
+                summary(model_medical)$r.squared),
+  Adj_R_squared = c(summary(model_base)$adj.r.squared,
+                    summary(model_lifestyle)$adj.r.squared,
+                    summary(model_medical)$adj.r.squared),
+  AIC = c(AIC(model_base), AIC(model_lifestyle), AIC(model_medical)),
+  BIC = c(BIC(model_base), BIC(model_lifestyle), BIC(model_medical)),
+  Residual_SE = c(summary(model_base)$sigma,
+                  summary(model_lifestyle)$sigma,
+                  summary(model_medical)$sigma)
+)
+
+print(model_summary, digits = 4)
+```
+
+```{r sleep-effects-summary}
+# Summary of sleep variable effects across models
+cat("\n=== Sleep Variable Effects Across Models ===\n\n")
+
+extract_sleep_coefs <- function(model, name) {
+  coefs <- summary(model)$coefficients
+  data.frame(
+    Model = name,
+    Sleep_Hours_Coef = coefs["Avg_sleep_hours", "Estimate"],
+    Sleep_Hours_p = coefs["Avg_sleep_hours", "Pr(>|t|)"],
+    Insomnia_Coef = coefs["Insomnia", "Estimate"],
+    Insomnia_p = coefs["Insomnia", "Pr(>|t|)"],
+    Sleep_Apnea_Coef = coefs["Sleep_apnea", "Estimate"],
+    Sleep_Apnea_p = coefs["Sleep_apnea", "Pr(>|t|)"]
+  )
+}
+
+sleep_effects <- rbind(
+  extract_sleep_coefs(model_base, "Stage 1"),
+  extract_sleep_coefs(model_lifestyle, "Stage 2"),
+  extract_sleep_coefs(model_medical, "Stage 3")
+)
+
+print(sleep_effects, digits = 4)
+```
+
+```{r conclusions-s1-3}
+cat("\n=== Key Conclusions from Stages 1-3 ===\n\n")
+
+final_coefs <- summary(model_medical)$coefficients
+
+cat("1. SLEEP DURATION:\n")
+cat("   After full adjustment, each additional hour of sleep is associated with a\n")
+cat("   ", round(final_coefs["Avg_sleep_hours", "Estimate"], 3),
+    " point change in PHQ-9 score (p =",
+    format(final_coefs["Avg_sleep_hours", "Pr(>|t|)"], digits = 3), ")\n\n")
+
+cat("2. INSOMNIA (Diagnosed Trouble Sleeping):\n")
+cat("   Individuals with diagnosed insomnia have on average\n")
+cat("   ", round(final_coefs["Insomnia", "Estimate"], 3),
+    " points higher PHQ-9 scores (p =",
+    format(final_coefs["Insomnia", "Pr(>|t|)"], digits = 3), ")\n\n")
+
+cat("3. SLEEP APNEA SYMPTOMS:\n")
+cat("   Frequent snoring/gasping is associated with\n")
+cat("   ", round(final_coefs["Sleep_apnea", "Estimate"], 3),
+    " point change in PHQ-9 score (p =",
+    format(final_coefs["Sleep_apnea", "Pr(>|t|)"], digits = 3), ")\n\n")
+
+cat("4. MODEL FIT IMPROVEMENT:\n")
+cat("   - Adding lifestyle covariates improved R² from",
+    round(summary(model_base)$r.squared, 4), "to",
+    round(summary(model_lifestyle)$r.squared, 4), "\n")
+cat("   - Adding medical intervention covariates further improved R² to",
+    round(summary(model_medical)$r.squared, 4), "\n\n")
+
+cat("5. SIGNIFICANT INTERACTIONS IDENTIFIED:\n")
+cat("   (Details provided in respective interaction test sections above)\n")
+```
+
+# Session Information
+
+```{r session-info}
+sessionInfo()
 ```
