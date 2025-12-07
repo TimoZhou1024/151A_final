@@ -1,0 +1,151 @@
+\documentclass{article}
+
+% Language setting
+% Replace `english' with e.g. `spanish' to change the document language
+\usepackage[english]{babel}
+
+% Set page size and margins
+% Replace `letterpaper' with `a4paper' for UK/EU standard size
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+\title{Proposal: Studying the Association Between Sleep and Depression Outcomes}
+\author{Tianyun Jiang, Siyuan Zhou, Ethan Hardcastle}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem Background}
+\begin{enumerate}
+    \item \textbf{Research Question:} We aim to study the association between sleep and depression outcomes among U.S. adults using the NHANES 2017-2020 ("Pre-Pandemic") data. Specifically: How do sleep duration and sleep trouble (e.g., snoring, gasping, diagnosed sleep disorders) relate to depressive symptom severity (quantified by Patient Health Questionnaire 9 [PHQ-9] total score), after adjusting for demographics, lifestyle factors, and comorbidities? 
+    
+	\item \textbf{Question Relevance:} Depression is a leading cause of disability and health burden in the U.S. Sleep duration and sleep quality are potentially modifiable risk factors that are strongly correlated with mental health. Clarifying their independent associations with depression severity, while rigorously adjusting for confounding variables, can inform clinical screening, patient education (e.g., sleep hygiene), and population-level policy. Using NHANES enables nationally representative inference for noninstitutionalized U.S. adults and supports subgroup exploration by age, sex, and race/Hispanic origin.
+    
+	\item \textbf{Related Work:} Prior studies consistently report that poor sleep quality is associated with more serious depressive symptoms. For example, Joo et al. (2022) reported a strong link between sleep quality and depressive symptoms in adults (Journal of Affective Disorders, 310, 258--265; \href{https://doi.org/10.1016/j.jad.2022.05.004}{doi:10.1016/j.jad.2022.05.004}). But few NHANES-based studies have jointly modeled sleep quantity and quality with depression severity under full confounder control. Building on this literature, our analysis will use PHQ-9 to construct a total depression score (0--27) and explore its associations with sleep duration and sleep-trouble indicators, progressing from simple models to fully adjusted hierarchical models with rigorous diagnostics.
+\end{enumerate}
+
+\section{Dataset}
+\begin{enumerate}
+\item \textbf{Proof of Load:} We have successfully loaded the processed dataset and verified its structure:
+
+\begin{figure}[h]
+    \centering
+    % Placeholder box for a screenshot/table image
+    % \fbox{\rule{0pt}{2in} \rule{3.5in}{0pt}}
+    % here is an example of including an actual image:
+    \includegraphics[width=0.7\textwidth]{proof.png}
+    \caption{RStudio preview after loading the dataset.}
+\end{figure}
+
+\item \textbf{Dataset Source:} We use a certain subset of the 2017-March 2020 ("Pre-Pandemic") National Health and Nutrition Examination Survey (NHANES) - \href{https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=Demographics&Cycle=2017-2020}{NHANES Portal}.
+
+\\
+
+Our analysis will draw on several NHANES component files from that period, each distributed separately as XPTs. Specifically, we will merge XPTs representing \href{https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=Demographics&Cycle=2017-2020}{Demographics} (for Demographics [DEMO], the \href{https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=Questionnaire&Cycle=2017-2020}{Questionnaire} (for Sleep Disorders [SLQ], Alcohol Use [ALQ], Medical Conditions [MCQ], Depression Screener [DPQ], Physical Activity [PAQ], Prescription Medications [RXQ] and Smoking [SMQ]), \href{https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=Examination&Cycle=2017-2020}{Examination Data} (for Body Measures [BMX]), and finally \href{https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=Dietary&Cycle=2017-2020}{Dietary Data} (for Total Nutrient Intakes [DR1TOT]).
+
+We will merge sleep-related components and PHQ-9 items as needed by the participant identifier (SEQN), following NHANES documentation for variable compatibility across the combined 2017--March 2020 File.
+
+\item \textbf{Dataset Processing:} We follow a reproducible pipeline (adapting steps as needed for data quality and analysis goals):
+\begin{enumerate}
+    \item \emph{Format Conversion:} Convert XPT to CSV using an online converter (\href{https://convert.guru/converter}{convert.guru}).
+    \item \emph{Header and Variable naming:} Use provided variable descriptions to create human-readable names; maintain a codebook mapping original variables to clean names.
+    \item \emph{Missing Data:}
+    \begin{itemize}
+        \item Drop columns with more than 60\% missingness (to balance sample retention and data reliability - threshold may be tuned in sensitivity analyses).
+        \item For remaining variables with any missing values, create an \textbf{NA-indicator} column per variable (1 = originally NA, 0 = observed) and impute numeric NAs conservatively (e.g., 0) to preserve missingness information.
+    \end{itemize}
+    \item \emph{Categorical Variables:} One-hot encode all categorical predictors and add the corresponding dummy columns.
+    \item \emph{Standardization:} Standardize continuous predictors as Z-scores to aid coefficient comparability.
+    \item \emph{Critical Note on NHANES survey design variables:} The following columns \textbf{are not used as regression covariates}: \texttt{Interview\_sample\_weight}, \texttt{MEC\_exam\_sample\_weight}, 
+    
+    \texttt{Masked\_variance\_pseudo\_PSU} and \texttt{Masked\_variance\_pseudo\_stratum}. 
+    
+    According to CDC analytic guidelines (Vital and Health Statistics, Series 2, No. 190, May 2022; \href{https://dx.doi.org/10.15620/cdc:115434}
+    {doi:10.15620/cdc:115434}), these variables are used to specify the complex survey design, not as predictors. In other words, they represent estimation of sample weights and the design-based variance, which make the dataset more reliable.
+
+\end{enumerate}
+
+\item \textbf{Finalized Dataset:} After merging the data from all sources and cleaning for duplicate SEQN values, the final Dataset contains 15,561 observations, with variables (in original-coded names with descriptive alternative):
+
+\begin{itemize}
+        \item \emph{Response Variables:} DPQ010-DPQ090 for Depressive Symptoms, including: 'Little interest or pleasure in doing things' [DPQ010], 'Feeling down, depressed, or hopeless' [DPQ020] etc. - hence PHQ-9 Total Score.
+
+        \item \emph{Main Regressors:} Sleep Metrics: SLD012 (sleep hours on weekdays/workdays), SLD013 (sleep hours on weekends/non-workdays), SLQ050 ("ever told doctor you had trouble sleeping"), SLQ030 ("how often do you snore") and SLQ040 ("how often snort/gasp or stop breathing during sleep").
+
+        \item \emph{Demographic Controls:} RIDAGEYR (age in years), RIAGENDR (gender), RIDRETH3 (race/ethnicity), DMDEDUC2 (education level), INDFMPIR (income-to-poverty ratio) and RIDRETH3 (race/hispanic origin).
+
+        \item \emph{Lifestyle Covariates:} BMXWT (kg weight), BMXBMI (BMI), PAQ620 (work: vigorous), PAQ635 (work: moderate), PAQ650 (transport: walk/bike), PAQ665 (recreation: vigorous) etc.
+
+ 
+\end{itemize}
+
+\newpage{}
+
+
+
+
+
+
+
+% \noindent\textit{R survey-design placeholder (to be adapted during analysis):}
+% \begin{verbatim}
+% # library(survey)
+% # des <- svydesign(id = ~Masked_variance_pseudo_PSU,
+% #                  strata = ~Masked_variance_pseudo_stratum,
+% #                  weights = ~MEC_exam_sample_weight, # or Interview_sample_weight
+% #                  data = dat, nest = TRUE)
+% # svyglm(PHQ9_total ~ sleep_duration + snore + gasp + age + sex + race + ..., design = des)
+% \end{verbatim}
+
+% \item \textbf{Some EDA of the dataset.} We will conduct both unweighted and survey-weighted descriptive analyses (where applicable) and check modeling assumptions:
+% \begin{itemize}
+%     \item \emph{Univariate distributions:} Histograms/density plots for PHQ-9 total and sleep duration; bar charts for categorical sleep-trouble indicators.
+%     \item \emph{Bivariate relationships:} Scatterplots with LOESS (sleep duration vs. PHQ-9); boxplots of PHQ-9 by sleep-trouble categories.
+%     \item \emph{Correlation structure:} Pearson/Spearman correlations among continuous predictors; heatmap to screen multicollinearity; compute VIFs in preliminary OLS fits.
+%     \item \emph{Assumption checks (for linear modeling):} Component-plus-residual plots for linearity; Breusch--Pagan test for heteroskedasticity; Q--Q plot of residuals for normality; Cook's distance and leverage to flag influential points.
+%     \item \emph{Missingness diagnostics:} Use NA-indicator variables to visualize where missingness concentrates; test whether missingness is systematically associated with outcome/predictors.
+%     \item \emph{Survey-weighted summaries (if used):} Compare weighted vs. unweighted means/proportions to understand sample-to-population differences.
+% \end{itemize}
+
+% \noindent\textit{EDA plot placeholders (to be replaced with actual figures):}
+% \begin{figure}[h]
+%     \centering
+%     \fbox{\rule{0pt}{2in} \rule{3.5in}{0pt}}
+%     \caption{Placeholder: Histogram of PHQ-9 total score.}
+% \end{figure}
+
+% \begin{figure}[h]
+%     \centering
+%     \fbox{\rule{0pt}{2in} \rule{3.5in}{0pt}}
+%     \caption{Placeholder: Sleep duration vs. PHQ-9 with LOESS.}
+% \end{figure}
+\end{enumerate}
+
+\section{Regression Analysis Plan}
+
+\begin{itemize}
+    \item \emph{Stage 1: Base Model}
+    
+    In this stage, we will use the total score of depressive symptoms measured by PHQ-9 as the response. We will also merge the sleep duration during weekdays and that during weekends as one regressor by averaging them. The main regressors would be sleep duration, whether experiencing insomnia or not and whether experiencing sleep apnea or not. The covariates include gender, races, ages, family income-to-poverty ratio and physical fitness. We will first check whether the assumption of the Normal Linear Model (NLM) holds for this simple model. To be more specific, we will check the plot of residuals and fitted values for the assumptions about linearity and homoscedasticity and the Q-Q plot for the assumption of normality. If either of them fails, we would try multiple ways to fix them (applying transformation/switching to generalized linear models/utilizing bootstraps). Within this stage, we will only focus on the main effects and verify some general ideas, like whether sleep quality and depression are negatively correlated (i.e., study of interaction effects is temporarily omitted).
+    \item \emph{Stage 2: Adding Lifestyle Covariates}
+    
+    Based on the simple model in \emph{Stage 1}, we will add another dimension: \texttt{lifestyle}. This mainly includes the activity intensity during work and recreation, smoking exposure as well as the types of daily transport. We would conduct some hypothesis tests about the interaction effects between those lifestyle variables and the sleep quality variables.
+    \item \emph{Stage 3: Adding Medical Intervention Covariates}
+    
+    We now iterate further by adding variables tracking interventions. They mainly consist of whether taking prescription medicines in the last few months or not and whether seeking professional help from therapists or not. Again, we will conduct some hypothesis tests about the interaction effects between those intervention variables and the sleep quality variables.
+    \item \emph{Stage 4: Focusing on Individual Depression Responses}
+    
+    We furnish the model with interaction terms that are found during \emph{Stage 2} and \emph{Stage 3}. After constructing this relative robust model, now we want to know the individual impact of sleep quality on different depressive symptoms. We will go through nine types of depressive symptoms and choose one of them as the response at each time. F-tests will be applied to check if the coefficients of sleep quality variables are significant for every depressive symptoms. 
+    \item \emph{Stage 5: In-Depth Sleep Predictors}
+    
+    Now we go back to the model that uses total scores as the response. We also want to know what exact perspective of sleep quality is more dominant in affecting depression. We will first no longer average the sleep duration during weekdays and that during weekends. Instead, we will treat them as two explanatory variables and conduct a hypothesis test about whether their coefficients are the same. On top of that, we would compare the standardized coefficients for different sleep quality variables. Given that potential multicollinearity will make standardized coefficients misleading, we will also carry out the conditional dominance analysis. This analysis will tell us about the relative importance of three sleep quality variables in terms of the explained variance supposing all other variables are fixed.\\
+    
+    \emph{Throughout:} After each stage we would try to identify potential outliers, leverage points and influential points (using the Cook's distance) in the model. We will analyze the generation of these abnormal points and conduct the robustness test for the model. \\
+\end{itemize}
+
+\end{document}
