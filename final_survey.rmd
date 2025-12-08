@@ -978,6 +978,340 @@ cat("5. BEST PRACTICES: Follows CDC guidelines for NHANES analysis\n")
 cat("   - Required for nationally representative conclusions\n")
 ```
 
+
+# Stage 4: Individual PHQ-9 Symptom Models
+```{r}
+############################################################
+# Stage 4: Individual PHQ-9 Symptom Models (Corrected)
+############################################################
+
+library(survey)
+library(car)
+
+data_analysis$sleep_wd_z <- as.numeric(scale(data_analysis$Hours_of_sleep_on_weekdays_workdays))
+data_analysis$sleep_we_z <- as.numeric(scale(data_analysis$Hours_of_sleep_on_weekends_non_workdays))
+data_analysis$insomnia_z <- as.numeric(scale(data_analysis$Insomnia))
+data_analysis$apnea_z    <- as.numeric(scale(data_analysis$Sleep_apnea))
+
+# Rebuild survey design so new variables are included
+des <- svydesign(
+  id = ~Masked_variance_pseudo_PSU,
+  strata = ~Masked_variance_pseudo_stratum,
+  weights = ~MEC_exam_sample_weight,
+  data = data_analysis,
+  nest = TRUE
+)
+
+cat("\n=== Stage 4: Individual PHQ-9 Symptoms (Survey-Weighted Models) ===\n")
+
+phq_items <- c(
+  "Little_interest_or_pleasure_in_doing_things",
+  "Feeling_down_depressed_or_hopeless",
+  "Trouble_sleeping_or_sleeping_too_much",
+  "Feeling_tired_or_having_little_energy",
+  "Poor_appetite_or_overeating",
+  "Feeling_bad_about_yourself_or_failure",
+  "Trouble_concentrating",
+  "Moving_speaking_slowly_or_being_fidgety_restless",
+  "Thoughts_of_being_better_off_dead_self_harm"
+)
+
+# RHS of model (without the "~")
+rhs_terms <- paste(
+  "Avg_sleep_hours",
+  "Insomnia",
+  "Sleep_apnea",
+  "Sex",
+  "Race",
+  "Age_in_years_at_screening",
+  "Family_income_to_poverty_ratio",
+  "Body_mass_index",
+  "Work_vigorous_intensity_activity",
+  "Work_moderate_intensity_activity",
+  "Transport_walk_or_bicycle",
+  "Recreation_vigorous_intensity_activity",
+  "Secondhand_smoke_exposure_at_home",
+  "Took_any_prescription_medicine",
+  "Number_of_prescription_medicines",
+  "Seen_talked_to_a_mental_health_professional",
+  sep = " + "
+)
+
+models_stage4 <- list()
+f_tests_stage4 <- list()
+
+for (item in phq_items) {
+
+  # proper formula construction
+  formula_item <- as.formula(paste(item, "~", rhs_terms))
+
+  model_item <- svyglm(formula_item, design = des, family = gaussian())
+  models_stage4[[item]] <- model_item
+  
+  # Correct joint significance test
+  f_test <- regTermTest(model_item, 
+                        ~ Avg_sleep_hours + Insomnia + Sleep_apnea)
+  
+  f_tests_stage4[[item]] <- f_test
+}
+
+cat("\n=== Joint Significance of Sleep Variables For Each PHQ Item ===\n")
+for (item in phq_items) {
+  cat("\n---", item, "---\n")
+  print(f_tests_stage4[[item]])
+}
+
+############################################################
+# Stage 4 Diagnostics for All PHQ-9 Items
+############################################################
+
+cat("\n=== Stage 4 Diagnostics: All PHQ-9 Symptom Models ===\n")
+
+phq_names <- names(models_stage4)
+
+# Loop through all PHQ item models
+for (i in seq_along(models_stage4)) {
+
+  model_i <- models_stage4[[i]]
+  item_i  <- phq_names[i]
+
+  cat("\n\n----------------------------------------------\n")
+  cat("Diagnostics for PHQ Item:", item_i, "\n")
+  cat("----------------------------------------------\n\n")
+
+  # Create two plots per item
+  par(mfrow=c(1,2))
+
+  # Residuals vs Fitted
+  plot(
+    fitted(model_i),
+    residuals(model_i, type="pearson"),
+    pch=16, col=rgb(0,0,0,0.3),
+    xlab="Fitted Values",
+    ylab="Pearson Residuals",
+    main=paste("Residuals vs Fitted\n", item_i)
+  )
+  abline(h=0, col="red", lwd=2)
+
+  # Q-Q Plot
+  qqnorm(
+    residuals(model_i, type="pearson"),
+    main=paste("Normal Q-Q Plot\n", item_i),
+    pch=16, col=rgb(0,0,0,0.3)
+  )
+  qqline(residuals(model_i, type="pearson"), col="red", lwd=2)
+
+}
+
+
+```
+# Stage 5: In-Depth Sleep Predictors
+## 5.1 Weekday vs Weekend Sleep as Separate Predictors
+```{r}
+############################################################
+# Stage 5: Split weekday/weekend sleep
+############################################################
+
+cat("\n=== Stage 5: In-Depth Sleep Predictors ===\n")
+
+# Create split sleep variables (already exist in your dataset)
+# Hours_of_sleep_on_weekdays_workdays
+# Hours_of_sleep_on_weekends_non_workdays
+
+model_stage5 <- svyglm(
+  PHQ9_total ~ 
+    Hours_of_sleep_on_weekdays_workdays +
+    Hours_of_sleep_on_weekends_non_workdays +
+    Insomnia + Sleep_apnea +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity + Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle + Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home +
+    Took_any_prescription_medicine + Number_of_prescription_medicines +
+    Seen_talked_to_a_mental_health_professional,
+  design = des,
+  family = gaussian())
+
+summary(model_stage5)
+```
+
+## 5.2 Test Whether Weekday Sleep = Weekend Sleep
+```{r}
+############################################################
+# Test if weekday and weekend sleep have same coefficient
+############################################################
+
+cat("\n=== Test: Weekday Sleep Coef = Weekend Sleep Coef ===\n")
+
+equal_test <- regTermTest(
+  model_stage5,
+  ~ Hours_of_sleep_on_weekdays_workdays - Hours_of_sleep_on_weekends_non_workdays
+)
+equal_test
+```
+
+## 5.3 Standardized Coefficients (survey-weighted)
+```{r}
+## 5.3 Standardized Coefficients (survey-weighted)
+############################################################
+# Standardized coefficients under survey weights
+############################################################
+
+cat("\n=== Standardized Coefficients (Survey-Weighted) ===\n")
+
+# Function to standardize predictors
+std <- function(x) (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
+
+# 1. 创建包含标准化变量的新数据框
+data_std <- data_analysis %>%
+  mutate(
+    # 注意：PHQ9_total等其他变量也应被保留
+    sleep_wd_z = std(Hours_of_sleep_on_weekdays_workdays),
+    sleep_we_z = std(Hours_of_sleep_on_weekends_non_workdays),
+    insomnia_z = std(Insomnia),
+    apnea_z = std(Sleep_apnea)
+    # 其他协变量（如Age, Sex等）保留原值，因为模型中它们未被标准化
+  )
+
+# 2. **关键修正：** 基于新数据框 data_std 重新创建调查设计对象 des_std
+# des_std 现已包含所有 *_z 变量
+des_std <- svydesign(
+  id = ~Masked_variance_pseudo_PSU,
+  strata = ~Masked_variance_pseudo_stratum,
+  weights = ~MEC_exam_sample_weight,
+  data = data_std, # 使用包含 Z-score 变量的新数据
+  nest = TRUE
+)
+
+
+# 3. 运行模型，使用正确的 design 对象 des_std
+model_stage5_std <- svyglm(
+  PHQ9_total ~ sleep_wd_z + sleep_we_z + insomnia_z + apnea_z +
+    Sex + Race + Age_in_years_at_screening +
+    Family_income_to_poverty_ratio + Body_mass_index +
+    Work_vigorous_intensity_activity + Work_moderate_intensity_activity +
+    Transport_walk_or_bicycle + Recreation_vigorous_intensity_activity +
+    Secondhand_smoke_exposure_at_home +
+    Took_any_prescription_medicine + Number_of_prescription_medicines +
+    Seen_talked_to_a_mental_health_professional,
+  design = des_std, # 使用新创建的 des_std 对象
+  family = gaussian()
+)
+
+summary(model_stage5_std)$coefficients[c("sleep_wd_z","sleep_we_z","insomnia_z","apnea_z"), ]
+
+```
+## 5.4 Conditional Dominance Analysis (Approximated for Survey Weights)
+```{r}
+## 5.4 Conditional Dominance Analysis (Approximated for Survey Weights)
+############################################################
+# Approximate dominance analysis using survey R-squared drops
+############################################################
+
+cat("\n=== Conditional Dominance Analysis (Approximate for Survey Models) ===\n")
+
+# --- 1. 提取模型组件和变量列表 ---
+
+# 完整模型 R²
+R2_full <- summary(model_stage5)$r.squared
+
+# 从 model_stage5 中提取调查设计对象 (最安全的方式)
+full_design <- model_stage5$survey.design
+
+# 从 model_stage5 中提取公式变量
+full_formula_vars <- all.vars(formula(model_stage5))
+response_var <- full_formula_vars[1] # PHQ9_total
+predictors_list <- full_formula_vars[-1]
+
+# 待移除的睡眠变量列表 (使用 model_stage5 中的变量名)
+sleep_vars <- c(
+    "Hours_of_sleep_on_weekdays_workdays", 
+    "Hours_of_sleep_on_weekends_non_workdays", 
+    "Insomnia", 
+    "Sleep_apnea"
+)
+
+# --- 2. 健壮的 R2 计算函数 ---
+
+drop_R2_safe <- function(drop_var) {
+  
+  # a. 确定子模型预测变量
+  sub_predictors <- setdiff(predictors_list, drop_var)
+  
+  # b. 构建子模型公式
+  sub_formula <- reformulate(sub_predictors, response = response_var)
+  
+  # c. 使用 tryCatch 运行子模型，强制返回长度为 1 的数值
+  r_squared_result <- tryCatch({
+    
+    # 尝试运行 svyglm
+    m <- svyglm(sub_formula, design = full_design, family = gaussian())
+    
+    # 尝试提取 R² (抑制可能的警告)
+    suppressWarnings(summary(m)$r.squared)
+    
+  }, error = function(e) {
+    # 如果 svyglm 失败，返回 NA_real_
+    warning(paste("Sub-model FAILED for dropped variable:", drop_var, ". Error:", e$message))
+    return(NA_real_) 
+  })
+  
+  # d. 最终安全检查：如果结果不是长度 1 的数值，也返回 NA_real_
+  if (is.null(r_squared_result) || length(r_squared_result) != 1 || !is.numeric(r_squared_result)) {
+      return(NA_real_)
+  }
+  
+  return(r_squared_result)
+}
+
+# --- 3. 调用函数并计算 R2 损失 ---
+
+R2_without_weekday <- drop_R2_safe(sleep_vars[1])
+R2_without_weekend <- drop_R2_safe(sleep_vars[2])
+R2_without_insomnia <- drop_R2_safe(sleep_vars[3])
+R2_without_apnea <- drop_R2_safe(sleep_vars[4])
+
+# 4. 创建数据框
+# 由于 R2_full 和 R2_without_X 现在保证都是长度为 1 的数值 (或 NA)，data.frame 不会报错。
+contribution <- data.frame(
+  Variable = c("Weekday Sleep", "Weekend Sleep", "Insomnia", "Sleep Apnea"),
+  R2_loss = c(
+    R2_full - R2_without_weekday,
+    R2_full - R2_without_weekend,
+    R2_full - R2_without_insomnia,
+    R2_full - R2_without_apnea
+  )
+)
+
+print(contribution)
+```
+
+## 5.5 Diagnostics
+```{r}
+############################################################
+# Diagnostics for Stage 5
+############################################################
+
+par(mfrow = c(1,2))
+
+plot(fitted(model_stage5), residuals(model_stage5, type="pearson"),
+     pch=16, col=rgb(0,0,0,0.3),
+     xlab="Fitted", ylab="Pearson Residuals",
+     main="Residuals vs Fitted (Stage 5)")
+abline(h=0, col="red", lwd=2)
+
+qqnorm(residuals(model_stage5, type="pearson"),
+       main="Normal Q-Q Plot (Stage 5)",
+       pch=16, col=rgb(0,0,0,0.3))
+qqline(residuals(model_stage5, type="pearson"), col="red", lwd=2)
+
+```
+
+
+
+
+
 # Session Information
 
 ```{r session-info}
