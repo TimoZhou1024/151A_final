@@ -424,75 +424,290 @@ if (anova_test$`Pr(>F)`[2] < 0.05) {
 
 ## Interaction Effects: Lifestyle × Sleep Variables
 
-```{r interaction-lifestyle-sleep}
-# Test interactions between lifestyle variables and sleep quality variables
+We systematically test all 15 possible interactions between the 3 sleep variables and 5 lifestyle variables. Each interaction is added to the base lifestyle model one at a time.
 
-# Interaction: Physical activity × Sleep duration
-model_interact_activity <- lm(PHQ9_total ~ Avg_sleep_hours * Recreation_vigorous_intensity_activity +
-                                Insomnia + Sleep_apnea +
-                                Sex + Race + Age_in_years_at_screening +
-                                Family_income_to_poverty_ratio + Body_mass_index +
-                                Work_vigorous_intensity_activity +
-                                Work_moderate_intensity_activity +
-                                Transport_walk_or_bicycle +
-                                Secondhand_smoke_exposure_at_home,
-                              data = data_analysis)
+```{r interaction-lifestyle-sleep-systematic}
+cat("=== Systematic Testing of All 15 Lifestyle × Sleep Interactions ===\n\n")
 
-cat("=== Interaction: Sleep Duration × Recreation Activity ===\n\n")
-summary(model_interact_activity)$coefficients[
-  grepl(":", rownames(summary(model_interact_activity)$coefficients)), ]
+# Define sleep variables
+sleep_vars <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+sleep_labels <- c("Average Sleep Hours", "Insomnia", "Sleep Apnea")
+
+# Define lifestyle variables
+lifestyle_vars <- c("Work_vigorous_intensity_activity",
+                    "Work_moderate_intensity_activity",
+                    "Transport_walk_or_bicycle",
+                    "Recreation_vigorous_intensity_activity",
+                    "Secondhand_smoke_exposure_at_home")
+lifestyle_labels <- c("Work Vigorous Activity",
+                      "Work Moderate Activity",
+                      "Active Transport",
+                      "Recreation Vigorous Activity",
+                      "Secondhand Smoke Exposure")
+
+# Store results
+interaction_results <- data.frame(
+  Sleep_Variable = character(),
+  Lifestyle_Variable = character(),
+  Interaction_Coef = numeric(),
+  Std_Error = numeric(),
+  t_value = numeric(),
+  p_value = numeric(),
+  Significant = character(),
+  stringsAsFactors = FALSE
+)
+
+# Test each interaction one by one
+for (i in 1:length(sleep_vars)) {
+  for (j in 1:length(lifestyle_vars)) {
+
+    sleep_var <- sleep_vars[i]
+    lifestyle_var <- lifestyle_vars[j]
+
+    # Create formula with one interaction term
+    # Build formula dynamically
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home"
+
+    interaction_term <- paste(sleep_var, "*", lifestyle_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+
+    # Fit model
+    model_interact <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Extract interaction coefficient
+    coef_summary <- summary(model_interact)$coefficients
+    interaction_row_name <- paste0(sleep_var, ":", lifestyle_var)
+
+    # Check if interaction term exists in output
+    if (interaction_row_name %in% rownames(coef_summary)) {
+      coef_est <- coef_summary[interaction_row_name, "Estimate"]
+      std_err <- coef_summary[interaction_row_name, "Std. Error"]
+      t_val <- coef_summary[interaction_row_name, "t value"]
+      p_val <- coef_summary[interaction_row_name, "Pr(>|t|)"]
+
+      sig_label <- ifelse(p_val < 0.001, "***",
+                          ifelse(p_val < 0.01, "**",
+                                 ifelse(p_val < 0.05, "*",
+                                        ifelse(p_val < 0.1, ".", "NS"))))
+
+      # Add to results
+      interaction_results <- rbind(interaction_results,
+                                   data.frame(
+                                     Sleep_Variable = sleep_labels[i],
+                                     Lifestyle_Variable = lifestyle_labels[j],
+                                     Interaction_Coef = coef_est,
+                                     Std_Error = std_err,
+                                     t_value = t_val,
+                                     p_value = p_val,
+                                     Significant = sig_label,
+                                     stringsAsFactors = FALSE
+                                   ))
+    }
+  }
+}
+
+# Display results
+cat("\n=== Summary of All 15 Interaction Tests ===\n\n")
+cat("Each interaction was tested by adding it to the base lifestyle model.\n")
+cat("Significance codes: *** p<0.001, ** p<0.01, * p<0.05, . p<0.1, NS not significant\n\n")
+
+print(interaction_results, row.names = FALSE, digits = 4)
+
+# Identify significant interactions
+significant_interactions <- interaction_results[interaction_results$p_value < 0.05, ]
+
+cat("\n\n=== Significant Interactions (p < 0.05) ===\n\n")
+if (nrow(significant_interactions) > 0) {
+  print(significant_interactions, row.names = FALSE, digits = 4)
+  cat("\n", nrow(significant_interactions), "out of 15 interactions are statistically significant.\n")
+} else {
+  cat("No interactions are statistically significant at the 0.05 level.\n")
+}
+
+# Marginally significant interactions
+marginal_interactions <- interaction_results[interaction_results$p_value >= 0.05 &
+                                              interaction_results$p_value < 0.1, ]
+cat("\n\n=== Marginally Significant Interactions (0.05 ≤ p < 0.1) ===\n\n")
+if (nrow(marginal_interactions) > 0) {
+  print(marginal_interactions, row.names = FALSE, digits = 4)
+} else {
+  cat("No marginally significant interactions.\n")
+}
 ```
 
-```{r interaction-smoke-sleep}
-# Interaction: Smoking exposure × Insomnia
-model_interact_smoke <- lm(PHQ9_total ~ Avg_sleep_hours +
-                             Insomnia * Secondhand_smoke_exposure_at_home +
-                             Sleep_apnea +
-                             Sex + Race + Age_in_years_at_screening +
-                             Family_income_to_poverty_ratio + Body_mass_index +
-                             Work_vigorous_intensity_activity +
-                             Work_moderate_intensity_activity +
-                             Transport_walk_or_bicycle +
-                             Recreation_vigorous_intensity_activity,
-                           data = data_analysis)
+## Detailed Examination of Significant Interactions
 
-cat("\n=== Interaction: Insomnia × Secondhand Smoke Exposure ===\n\n")
-summary(model_interact_smoke)$coefficients[
-  grepl(":", rownames(summary(model_interact_smoke)$coefficients)), ]
+```{r examine-significant-interactions}
+# For significant interactions, provide detailed output
+
+if (nrow(significant_interactions) > 0) {
+
+  cat("\n=== Detailed Models for Significant Interactions ===\n\n")
+
+  for (k in 1:nrow(significant_interactions)) {
+
+    sleep_var_label <- significant_interactions$Sleep_Variable[k]
+    lifestyle_var_label <- significant_interactions$Lifestyle_Variable[k]
+
+    # Map back to variable names
+    sleep_var <- sleep_vars[which(sleep_labels == sleep_var_label)]
+    lifestyle_var <- lifestyle_vars[which(lifestyle_labels == lifestyle_var_label)]
+
+    cat("\n", rep("=", 70), "\n", sep = "")
+    cat("Interaction:", sleep_var_label, "×", lifestyle_var_label, "\n")
+    cat(rep("=", 70), "\n\n", sep = "")
+
+    # Refit the model
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home"
+
+    interaction_term <- paste(sleep_var, "*", lifestyle_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+
+    model_interact_detail <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Show coefficient table for main effects and interaction
+    coef_table <- summary(model_interact_detail)$coefficients
+    relevant_rows <- c(sleep_var, lifestyle_var, paste0(sleep_var, ":", lifestyle_var))
+    relevant_rows <- relevant_rows[relevant_rows %in% rownames(coef_table)]
+
+    cat("Coefficients:\n")
+    print(coef_table[relevant_rows, , drop = FALSE])
+
+    cat("\n")
+  }
+
+} else {
+  cat("\n=== No Significant Interactions to Detail ===\n")
+}
 ```
 
-```{r interaction-transport-sleep}
-# Interaction: Active transport × Sleep quality
-model_interact_transport <- lm(PHQ9_total ~ Avg_sleep_hours * Transport_walk_or_bicycle +
-                                 Insomnia + Sleep_apnea +
-                                 Sex + Race + Age_in_years_at_screening +
-                                 Family_income_to_poverty_ratio + Body_mass_index +
-                                 Work_vigorous_intensity_activity +
-                                 Work_moderate_intensity_activity +
-                                 Recreation_vigorous_intensity_activity +
-                                 Secondhand_smoke_exposure_at_home,
-                               data = data_analysis)
+## Visualization of Interaction Effects
 
-cat("\n=== Interaction: Sleep Duration × Active Transport ===\n\n")
-summary(model_interact_transport)$coefficients[
-  grepl(":", rownames(summary(model_interact_transport)$coefficients)), ]
-```
+```{r visualize-interactions, fig.width=12, fig.height=8}
+# Visualize significant interactions
 
-```{r joint-interaction-test-s2}
-# Joint F-test for all lifestyle × sleep interactions
-model_full_interact_lifestyle <- lm(PHQ9_total ~
-                                      Avg_sleep_hours * (Recreation_vigorous_intensity_activity +
-                                                          Work_vigorous_intensity_activity +
-                                                          Transport_walk_or_bicycle) +
-                                      Insomnia * Secondhand_smoke_exposure_at_home +
-                                      Sleep_apnea +
-                                      Sex + Race + Age_in_years_at_screening +
-                                      Family_income_to_poverty_ratio + Body_mass_index +
-                                      Work_moderate_intensity_activity,
-                                    data = data_analysis)
+if (nrow(significant_interactions) > 0) {
 
-cat("\n=== Joint Test: All Lifestyle × Sleep Interactions ===\n\n")
-anova(model_lifestyle, model_full_interact_lifestyle)
+  # Determine layout
+  n_sig <- nrow(significant_interactions)
+  n_cols <- min(3, n_sig)
+  n_rows <- ceiling(n_sig / n_cols)
+
+  par(mfrow = c(n_rows, n_cols), mar = c(4, 4, 3, 1))
+
+  for (k in 1:n_sig) {
+
+    sleep_var_label <- significant_interactions$Sleep_Variable[k]
+    lifestyle_var_label <- significant_interactions$Lifestyle_Variable[k]
+
+    sleep_var <- sleep_vars[which(sleep_labels == sleep_var_label)]
+    lifestyle_var <- lifestyle_vars[which(lifestyle_labels == lifestyle_var_label)]
+
+    # Create interaction plot
+    # Split lifestyle variable into low/high groups
+    lifestyle_median <- median(data_analysis[[lifestyle_var]], na.rm = TRUE)
+    data_analysis$lifestyle_group <- ifelse(data_analysis[[lifestyle_var]] <= lifestyle_median,
+                                             "Low", "High")
+
+    # For binary variables, use actual levels
+    if (length(unique(data_analysis[[lifestyle_var]])) <= 3) {
+      data_analysis$lifestyle_group <- factor(data_analysis[[lifestyle_var]])
+    }
+
+    # Fit model with interaction
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home"
+
+    interaction_term <- paste(sleep_var, "*", lifestyle_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+    model_temp <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Create prediction data - handle binary vs continuous variables
+    sleep_unique <- unique(data_analysis[[sleep_var]][!is.na(data_analysis[[sleep_var]])])
+
+    # If sleep variable is binary or has few levels, use actual levels; otherwise create range
+    if (length(sleep_unique) <= 3) {
+      sleep_range <- sort(sleep_unique)
+    } else {
+      sleep_range <- seq(min(data_analysis[[sleep_var]], na.rm = TRUE),
+                         max(data_analysis[[sleep_var]], na.rm = TRUE),
+                         length.out = 50)
+    }
+
+    # Plot
+    plot(data_analysis[[sleep_var]], data_analysis$PHQ9_total,
+         pch = 16, col = rgb(0, 0, 0, 0.05),
+         xlab = sleep_var_label,
+         ylab = "PHQ-9 Total Score",
+         main = paste(sleep_var_label, "×", lifestyle_var_label))
+
+    # Add regression lines for different levels of lifestyle variable
+    lifestyle_levels <- unique(data_analysis[[lifestyle_var]])
+    lifestyle_levels <- lifestyle_levels[!is.na(lifestyle_levels)]
+
+    if (length(lifestyle_levels) <= 5) {
+      colors <- rainbow(length(lifestyle_levels))
+      for (m in 1:length(lifestyle_levels)) {
+
+        # Create base data frame with mean values
+        new_data <- data.frame(
+          Avg_sleep_hours = mean(data_analysis$Avg_sleep_hours, na.rm = TRUE),
+          Insomnia = mean(data_analysis$Insomnia, na.rm = TRUE),
+          Sleep_apnea = mean(data_analysis$Sleep_apnea, na.rm = TRUE),
+          Sex = names(sort(table(data_analysis$Sex), decreasing = TRUE))[1],
+          Race = names(sort(table(data_analysis$Race), decreasing = TRUE))[1],
+          Age_in_years_at_screening = mean(data_analysis$Age_in_years_at_screening, na.rm = TRUE),
+          Family_income_to_poverty_ratio = mean(data_analysis$Family_income_to_poverty_ratio, na.rm = TRUE),
+          Body_mass_index = mean(data_analysis$Body_mass_index, na.rm = TRUE),
+          Work_vigorous_intensity_activity = mean(data_analysis$Work_vigorous_intensity_activity, na.rm = TRUE),
+          Work_moderate_intensity_activity = mean(data_analysis$Work_moderate_intensity_activity, na.rm = TRUE),
+          Transport_walk_or_bicycle = mean(data_analysis$Transport_walk_or_bicycle, na.rm = TRUE),
+          Recreation_vigorous_intensity_activity = mean(data_analysis$Recreation_vigorous_intensity_activity, na.rm = TRUE),
+          Secondhand_smoke_exposure_at_home = mean(data_analysis$Secondhand_smoke_exposure_at_home, na.rm = TRUE)
+        )
+
+        # Replicate for each sleep_range value
+        new_data <- new_data[rep(1, length(sleep_range)), ]
+
+        # Set the sleep variable to the range
+        new_data[[sleep_var]] <- sleep_range
+
+        # Set the lifestyle variable to current level
+        new_data[[lifestyle_var]] <- lifestyle_levels[m]
+
+        pred <- predict(model_temp, newdata = new_data)
+        lines(sleep_range, pred, col = colors[m], lwd = 2)
+      }
+
+      legend("topright",
+             legend = paste(lifestyle_var_label, "=", lifestyle_levels),
+             col = colors, lwd = 2, cex = 0.7, bg = "white")
+    }
+  }
+
+} else {
+  cat("No significant interactions to visualize.\n")
+}
 ```
 
 ## Stage 2 Diagnostics
@@ -561,68 +776,290 @@ if (anova_test_s3$`Pr(>F)`[2] < 0.05) {
 
 ## Interaction Effects: Medical Intervention × Sleep Variables
 
-```{r interaction-meds-sleep}
-# Interaction: Prescription medicines × Sleep variables
-model_interact_meds <- lm(PHQ9_total ~ Avg_sleep_hours * Took_any_prescription_medicine +
-                            Insomnia * Took_any_prescription_medicine +
-                            Sleep_apnea +
-                            Sex + Race + Age_in_years_at_screening +
-                            Family_income_to_poverty_ratio + Body_mass_index +
-                            Work_vigorous_intensity_activity +
-                            Work_moderate_intensity_activity +
-                            Transport_walk_or_bicycle +
-                            Recreation_vigorous_intensity_activity +
-                            Secondhand_smoke_exposure_at_home +
-                            Number_of_prescription_medicines +
-                            Seen_talked_to_a_mental_health_professional,
-                          data = data_analysis)
+We systematically test all 9 possible interactions between the 3 sleep variables and 3 medical intervention variables. Each interaction is added to the base medical model one at a time.
 
-cat("=== Interaction: Sleep Variables × Prescription Medicine Use ===\n\n")
-interact_coefs <- summary(model_interact_meds)$coefficients
-print(interact_coefs[grepl(":", rownames(interact_coefs)), ])
+Note: We test interactions with binary medical intervention variables (Took_any_prescription_medicine, Seen_talked_to_a_mental_health_professional) and exclude Number_of_prescription_medicines from interactions as it's highly correlated with Took_any_prescription_medicine.
+
+```{r interaction-medical-sleep-systematic}
+cat("=== Systematic Testing of All 9 Medical × Sleep Interactions ===\n\n")
+
+# Define sleep variables (same as Stage 2)
+sleep_vars <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+sleep_labels <- c("Average Sleep Hours", "Insomnia", "Sleep Apnea")
+
+# Define medical intervention variables
+medical_vars <- c("Took_any_prescription_medicine",
+                  "Seen_talked_to_a_mental_health_professional",
+                  "Number_of_prescription_medicines")
+medical_labels <- c("Taking Prescription Medicine",
+                    "Mental Health Professional",
+                    "Number of Prescriptions")
+
+# Store results
+interaction_results_s3 <- data.frame(
+  Sleep_Variable = character(),
+  Medical_Variable = character(),
+  Interaction_Coef = numeric(),
+  Std_Error = numeric(),
+  t_value = numeric(),
+  p_value = numeric(),
+  Significant = character(),
+  stringsAsFactors = FALSE
+)
+
+# Test each interaction one by one
+for (i in 1:length(sleep_vars)) {
+  for (j in 1:length(medical_vars)) {
+
+    sleep_var <- sleep_vars[i]
+    medical_var <- medical_vars[j]
+
+    # Create formula with one interaction term
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home +
+                     Took_any_prescription_medicine +
+                     Number_of_prescription_medicines +
+                     Seen_talked_to_a_mental_health_professional"
+
+    interaction_term <- paste(sleep_var, "*", medical_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+
+    # Fit model
+    model_interact <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Extract interaction coefficient
+    coef_summary <- summary(model_interact)$coefficients
+    interaction_row_name <- paste0(sleep_var, ":", medical_var)
+
+    # Check if interaction term exists in output
+    if (interaction_row_name %in% rownames(coef_summary)) {
+      coef_est <- coef_summary[interaction_row_name, "Estimate"]
+      std_err <- coef_summary[interaction_row_name, "Std. Error"]
+      t_val <- coef_summary[interaction_row_name, "t value"]
+      p_val <- coef_summary[interaction_row_name, "Pr(>|t|)"]
+
+      sig_label <- ifelse(p_val < 0.001, "***",
+                          ifelse(p_val < 0.01, "**",
+                                 ifelse(p_val < 0.05, "*",
+                                        ifelse(p_val < 0.1, ".", "NS"))))
+
+      # Add to results
+      interaction_results_s3 <- rbind(interaction_results_s3,
+                                      data.frame(
+                                        Sleep_Variable = sleep_labels[i],
+                                        Medical_Variable = medical_labels[j],
+                                        Interaction_Coef = coef_est,
+                                        Std_Error = std_err,
+                                        t_value = t_val,
+                                        p_value = p_val,
+                                        Significant = sig_label,
+                                        stringsAsFactors = FALSE
+                                      ))
+    }
+  }
+}
+
+# Display results
+cat("\n=== Summary of All 9 Interaction Tests ===\n\n")
+cat("Each interaction was tested by adding it to the base medical model.\n")
+cat("Significance codes: *** p<0.001, ** p<0.01, * p<0.05, . p<0.1, NS not significant\n\n")
+
+print(interaction_results_s3, row.names = FALSE, digits = 4)
+
+# Identify significant interactions
+significant_interactions_s3 <- interaction_results_s3[interaction_results_s3$p_value < 0.05, ]
+
+cat("\n\n=== Significant Interactions (p < 0.05) ===\n\n")
+if (nrow(significant_interactions_s3) > 0) {
+  print(significant_interactions_s3, row.names = FALSE, digits = 4)
+  cat("\n", nrow(significant_interactions_s3), "out of 9 interactions are statistically significant.\n")
+} else {
+  cat("No interactions are statistically significant at the 0.05 level.\n")
+}
+
+# Marginally significant interactions
+marginal_interactions_s3 <- interaction_results_s3[interaction_results_s3$p_value >= 0.05 &
+                                                    interaction_results_s3$p_value < 0.1, ]
+cat("\n\n=== Marginally Significant Interactions (0.05 ≤ p < 0.1) ===\n\n")
+if (nrow(marginal_interactions_s3) > 0) {
+  print(marginal_interactions_s3, row.names = FALSE, digits = 4)
+} else {
+  cat("No marginally significant interactions.\n")
+}
 ```
 
-```{r interaction-therapy-sleep}
-# Interaction: Mental health professional × Sleep variables
-model_interact_therapy <- lm(PHQ9_total ~ Avg_sleep_hours * Seen_talked_to_a_mental_health_professional +
-                               Insomnia * Seen_talked_to_a_mental_health_professional +
-                               Sleep_apnea +
-                               Sex + Race + Age_in_years_at_screening +
-                               Family_income_to_poverty_ratio + Body_mass_index +
-                               Work_vigorous_intensity_activity +
-                               Work_moderate_intensity_activity +
-                               Transport_walk_or_bicycle +
-                               Recreation_vigorous_intensity_activity +
-                               Secondhand_smoke_exposure_at_home +
-                               Took_any_prescription_medicine +
-                               Number_of_prescription_medicines,
-                             data = data_analysis)
+## Detailed Examination of Significant Interactions (Stage 3)
 
-cat("\n=== Interaction: Sleep Variables × Mental Health Professional ===\n\n")
-interact_coefs_therapy <- summary(model_interact_therapy)$coefficients
-print(interact_coefs_therapy[grepl(":", rownames(interact_coefs_therapy)), ])
+```{r examine-significant-interactions-s3}
+# For significant interactions, provide detailed output
+
+if (nrow(significant_interactions_s3) > 0) {
+
+  cat("\n=== Detailed Models for Significant Medical × Sleep Interactions ===\n\n")
+
+  for (k in 1:nrow(significant_interactions_s3)) {
+
+    sleep_var_label <- significant_interactions_s3$Sleep_Variable[k]
+    medical_var_label <- significant_interactions_s3$Medical_Variable[k]
+
+    # Map back to variable names
+    sleep_var <- sleep_vars[which(sleep_labels == sleep_var_label)]
+    medical_var <- medical_vars[which(medical_labels == medical_var_label)]
+
+    cat("\n", rep("=", 70), "\n", sep = "")
+    cat("Interaction:", sleep_var_label, "×", medical_var_label, "\n")
+    cat(rep("=", 70), "\n\n", sep = "")
+
+    # Refit the model
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home +
+                     Took_any_prescription_medicine +
+                     Number_of_prescription_medicines +
+                     Seen_talked_to_a_mental_health_professional"
+
+    interaction_term <- paste(sleep_var, "*", medical_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+
+    model_interact_detail <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Show coefficient table for main effects and interaction
+    coef_table <- summary(model_interact_detail)$coefficients
+    relevant_rows <- c(sleep_var, medical_var, paste0(sleep_var, ":", medical_var))
+    relevant_rows <- relevant_rows[relevant_rows %in% rownames(coef_table)]
+
+    cat("Coefficients:\n")
+    print(coef_table[relevant_rows, , drop = FALSE])
+
+    cat("\n")
+  }
+
+} else {
+  cat("\n=== No Significant Medical × Sleep Interactions to Detail ===\n")
+}
 ```
 
-```{r joint-interaction-test-s3}
-# Joint F-test for medical × sleep interactions
-model_full_interact_medical <- lm(PHQ9_total ~
-                                    Avg_sleep_hours * (Took_any_prescription_medicine +
-                                                        Seen_talked_to_a_mental_health_professional) +
-                                    Insomnia * (Took_any_prescription_medicine +
-                                                  Seen_talked_to_a_mental_health_professional) +
-                                    Sleep_apnea +
-                                    Sex + Race + Age_in_years_at_screening +
-                                    Family_income_to_poverty_ratio + Body_mass_index +
-                                    Work_vigorous_intensity_activity +
-                                    Work_moderate_intensity_activity +
-                                    Transport_walk_or_bicycle +
-                                    Recreation_vigorous_intensity_activity +
-                                    Secondhand_smoke_exposure_at_home +
-                                    Number_of_prescription_medicines,
-                                  data = data_analysis)
+## Visualization of Medical Interaction Effects
 
-cat("\n=== Joint Test: All Medical × Sleep Interactions ===\n\n")
-anova(model_medical, model_full_interact_medical)
+```{r visualize-medical-interactions, fig.width=12, fig.height=8}
+# Visualize significant medical interactions
+
+if (nrow(significant_interactions_s3) > 0) {
+
+  # Determine layout
+  n_sig <- nrow(significant_interactions_s3)
+  n_cols <- min(3, n_sig)
+  n_rows <- ceiling(n_sig / n_cols)
+
+  par(mfrow = c(n_rows, n_cols), mar = c(4, 4, 3, 1))
+
+  for (k in 1:n_sig) {
+
+    sleep_var_label <- significant_interactions_s3$Sleep_Variable[k]
+    medical_var_label <- significant_interactions_s3$Medical_Variable[k]
+
+    sleep_var <- sleep_vars[which(sleep_labels == sleep_var_label)]
+    medical_var <- medical_vars[which(medical_labels == medical_var_label)]
+
+    # Fit model with interaction
+    base_formula <- "PHQ9_total ~ Avg_sleep_hours + Insomnia + Sleep_apnea +
+                     Sex + Race + Age_in_years_at_screening +
+                     Family_income_to_poverty_ratio + Body_mass_index +
+                     Work_vigorous_intensity_activity +
+                     Work_moderate_intensity_activity +
+                     Transport_walk_or_bicycle +
+                     Recreation_vigorous_intensity_activity +
+                     Secondhand_smoke_exposure_at_home +
+                     Took_any_prescription_medicine +
+                     Number_of_prescription_medicines +
+                     Seen_talked_to_a_mental_health_professional"
+
+    interaction_term <- paste(sleep_var, "*", medical_var)
+    formula_str <- paste(base_formula, "+", interaction_term)
+    model_temp <- lm(as.formula(formula_str), data = data_analysis)
+
+    # Create prediction data - handle binary vs continuous variables
+    sleep_unique <- unique(data_analysis[[sleep_var]][!is.na(data_analysis[[sleep_var]])])
+
+    # If sleep variable is binary or has few levels, use actual levels; otherwise create range
+    if (length(sleep_unique) <= 3) {
+      sleep_range <- sort(sleep_unique)
+    } else {
+      sleep_range <- seq(min(data_analysis[[sleep_var]], na.rm = TRUE),
+                         max(data_analysis[[sleep_var]], na.rm = TRUE),
+                         length.out = 50)
+    }
+
+    # Plot
+    plot(data_analysis[[sleep_var]], data_analysis$PHQ9_total,
+         pch = 16, col = rgb(0, 0, 0, 0.05),
+         xlab = sleep_var_label,
+         ylab = "PHQ-9 Total Score",
+         main = paste(sleep_var_label, "×", medical_var_label))
+
+    # Add regression lines for different levels of medical variable
+    medical_levels <- unique(data_analysis[[medical_var]])
+    medical_levels <- medical_levels[!is.na(medical_levels)]
+
+    # For binary or low-cardinality variables
+    if (length(medical_levels) <= 5) {
+      colors <- c("blue", "red", "green", "orange", "purple")[1:length(medical_levels)]
+
+      for (m in 1:length(medical_levels)) {
+
+        # Create base data frame with mean values
+        new_data <- data.frame(
+          Avg_sleep_hours = mean(data_analysis$Avg_sleep_hours, na.rm = TRUE),
+          Insomnia = mean(data_analysis$Insomnia, na.rm = TRUE),
+          Sleep_apnea = mean(data_analysis$Sleep_apnea, na.rm = TRUE),
+          Sex = names(sort(table(data_analysis$Sex), decreasing = TRUE))[1],
+          Race = names(sort(table(data_analysis$Race), decreasing = TRUE))[1],
+          Age_in_years_at_screening = mean(data_analysis$Age_in_years_at_screening, na.rm = TRUE),
+          Family_income_to_poverty_ratio = mean(data_analysis$Family_income_to_poverty_ratio, na.rm = TRUE),
+          Body_mass_index = mean(data_analysis$Body_mass_index, na.rm = TRUE),
+          Work_vigorous_intensity_activity = mean(data_analysis$Work_vigorous_intensity_activity, na.rm = TRUE),
+          Work_moderate_intensity_activity = mean(data_analysis$Work_moderate_intensity_activity, na.rm = TRUE),
+          Transport_walk_or_bicycle = mean(data_analysis$Transport_walk_or_bicycle, na.rm = TRUE),
+          Recreation_vigorous_intensity_activity = mean(data_analysis$Recreation_vigorous_intensity_activity, na.rm = TRUE),
+          Secondhand_smoke_exposure_at_home = mean(data_analysis$Secondhand_smoke_exposure_at_home, na.rm = TRUE),
+          Took_any_prescription_medicine = mean(data_analysis$Took_any_prescription_medicine, na.rm = TRUE),
+          Number_of_prescription_medicines = mean(data_analysis$Number_of_prescription_medicines, na.rm = TRUE),
+          Seen_talked_to_a_mental_health_professional = mean(data_analysis$Seen_talked_to_a_mental_health_professional, na.rm = TRUE)
+        )
+
+        # Replicate for each sleep_range value
+        new_data <- new_data[rep(1, length(sleep_range)), ]
+
+        # Set the sleep variable to the range
+        new_data[[sleep_var]] <- sleep_range
+
+        # Set the medical variable to current level
+        new_data[[medical_var]] <- medical_levels[m]
+
+        pred <- predict(model_temp, newdata = new_data)
+        lines(sleep_range, pred, col = colors[m], lwd = 2)
+      }
+
+      legend("topright",
+             legend = paste(medical_var_label, "=", medical_levels),
+             col = colors[1:length(medical_levels)], lwd = 2, cex = 0.7, bg = "white")
+    }
+  }
+
+} else {
+  cat("No significant medical interactions to visualize.\n")
+}
 ```
 
 ## Stage 3 Diagnostics
@@ -732,44 +1169,4 @@ sleep_effects <- rbind(
 )
 
 print(sleep_effects, digits = 4)
-```
-
-```{r conclusions-s1-3}
-cat("\n=== Key Conclusions from Stages 1-3 ===\n\n")
-
-final_coefs <- summary(model_medical)$coefficients
-
-cat("1. SLEEP DURATION:\n")
-cat("   After full adjustment, each additional hour of sleep is associated with a\n")
-cat("   ", round(final_coefs["Avg_sleep_hours", "Estimate"], 3),
-    " point change in PHQ-9 score (p =",
-    format(final_coefs["Avg_sleep_hours", "Pr(>|t|)"], digits = 3), ")\n\n")
-
-cat("2. INSOMNIA (Diagnosed Trouble Sleeping):\n")
-cat("   Individuals with diagnosed insomnia have on average\n")
-cat("   ", round(final_coefs["Insomnia", "Estimate"], 3),
-    " points higher PHQ-9 scores (p =",
-    format(final_coefs["Insomnia", "Pr(>|t|)"], digits = 3), ")\n\n")
-
-cat("3. SLEEP APNEA SYMPTOMS:\n")
-cat("   Frequent snoring/gasping is associated with\n")
-cat("   ", round(final_coefs["Sleep_apnea", "Estimate"], 3),
-    " point change in PHQ-9 score (p =",
-    format(final_coefs["Sleep_apnea", "Pr(>|t|)"], digits = 3), ")\n\n")
-
-cat("4. MODEL FIT IMPROVEMENT:\n")
-cat("   - Adding lifestyle covariates improved R² from",
-    round(summary(model_base)$r.squared, 4), "to",
-    round(summary(model_lifestyle)$r.squared, 4), "\n")
-cat("   - Adding medical intervention covariates further improved R² to",
-    round(summary(model_medical)$r.squared, 4), "\n\n")
-
-cat("5. SIGNIFICANT INTERACTIONS IDENTIFIED:\n")
-cat("   (Details provided in respective interaction test sections above)\n")
-```
-
-# Session Information
-
-```{r session-info}
-sessionInfo()
 ```
