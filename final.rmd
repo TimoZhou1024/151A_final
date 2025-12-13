@@ -106,13 +106,13 @@ summary(data$Family_income_to_poverty_ratio)
 ```{r filter-valid-data}
 # Filter to adults (18+) with valid PHQ-9 scores and sleep data
 # Also exclude rows where key sleep variables have NA indicators = 1
-
-data_analysis <- data %>%
-  filter(Age_in_years_at_screening >= 18,
-         !is.na(PHQ9_total),
-         !is.na(Avg_sleep_hours),
-         Hours_of_sleep_on_weekdays_workdays_NA_indicator == 0,
-         Hours_of_sleep_on_weekends_non_workdays_NA_indicator == 0)
+data_analysis <- data
+# data_analysis <- data %>%
+#   filter(Age_in_years_at_screening >= 18,
+#          !is.na(PHQ9_total),
+#          !is.na(Avg_sleep_hours),
+#          Hours_of_sleep_on_weekdays_workdays_NA_indicator == 0,
+#          Hours_of_sleep_on_weekends_non_workdays_NA_indicator == 0)
 
 cat("Analysis sample size:", nrow(data_analysis), "\n")
 cat("Age range:", min(data_analysis$Age_in_years_at_screening), "-",
