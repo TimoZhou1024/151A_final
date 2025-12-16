@@ -1172,3 +1172,103 @@ cat("   Stage 2:", round(AIC(model_lifestyle_final), 2), "\n")
 cat("   Stage 3:", round(AIC(model_medical_final), 2), "\n")
 ```
 
+# Stage4
+```{r stage4-individual-symptoms}
+# Stage 4: Analyze the impact of sleep quality variables on individual PHQ-9 
+# Define the sleep quality variables to be jointly tested
+sleep_predictors <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+
+# Data frame to store results
+stage4_results <- data.frame(
+  Symptom = character(),
+  ChiSq_Statistic = numeric(),
+  DF = numeric(),
+  P_Value = numeric(),
+  Significance = character(),
+  stringsAsFactors = FALSE
+)
+
+cat("=== Stage 4: Joint Significance Test (Wald Chi-Sq) for Sleep Predictors on PHQ-9 Items ===\n\n")
+
+# Use the base formula from the Stage 3 Final Model, replacing the outcome
+base_predictor_formula <- gsub("PHQ9_total ~ ", "", final_formula_s3)
+
+for (item in phq9_items) {
+  
+  # Create formula for the current symptom item
+  item_formula_str <- paste(item, "~", base_predictor_formula)
+  
+  # Fit Negative Binomial GLM (assuming consistency with total score model)
+  model_item <- tryCatch({
+    MASS::glm.nb(as.formula(item_formula_str), data = data_analysis)
+  }, error = function(e) {
+    cat(paste("Error fitting model for", item, ":", e$message, "\n"))
+    return(NULL)
+  })
+  
+  if (!is.null(model_item)) {
+    # Perform joint significance test (Wald Chi-Sq test) for the three sleep predictors
+    # H0: All coefficients for Avg_sleep_hours, Insomnia, and Sleep_apnea are simultaneously zero.
+    test_result <- car::linearHypothesis(model_item, hypothesis.matrix = sleep_predictors)
+    
+    # Extract results
+    chisq_stat <- test_result$`Chisq`[2]
+    df <- test_result$`Df`[2]
+    p_val <- test_result$`Pr(>Chisq)`[2]
+    
+    sig_label <- ifelse(p_val < 0.001, "***",
+                        ifelse(p_val < 0.01, "**",
+                               ifelse(p_val < 0.05, "*", "NS")))
+    
+    # Store results
+    stage4_results <- rbind(stage4_results,
+                            data.frame(
+                              Symptom = item,
+                              ChiSq_Statistic = chisq_stat,
+                              DF = df,
+                              P_Value = p_val,
+                              Significance = sig_label,
+                              stringsAsFactors = FALSE
+                            ))
+  }
+}
+
+print(stage4_results, row.names = FALSE, digits = 4)
+```
+
+# Stage5
+```{r stage5-split-sleep-model}
+# Stage 5: Split the averaged sleep variable and fit the robust model
+library(MASS)
+library(car)
+library(dplyr)
+
+# 1. Create the new base formula by replacing Avg_sleep_hours with SLD012 and SLD013
+# We extract the main effects formula, remove Avg_sleep_hours, and insert the two split variables.
+main_effects_formula <- "Avg_sleep_hours + Insomnia + Sleep_apnea +
+                         Age_in_years_at_screening + Sex + Race + 
+                         Family_income_to_poverty_ratio + Body_mass_index +
+                         Work_vigorous_intensity_activity + Work_moderate_intensity_activity + 
+                         Transport_walk_or_bicycle + Recreation_vigorous_intensity_activity + 
+                         Secondhand_smoke_exposure_at_home + 
+                         Took_any_prescription_medicine + Number_of_prescription_medicines + 
+                         Seen_talked_to_a_mental_health_professional"
+split_main_effects <- gsub("Avg_sleep_hours \\+ ", "", main_effects_formula)
+split_main_effects <- paste("SLD012 + SLD013 +", split_main_effects)
+
+# 2. Re-create the full formula string with split sleep duration
+split_formula_string <- paste("PHQ9_total ~", split_main_effects)
+if (length(interaction_terms) > 0) {
+  # Note: Existing interaction terms involving Avg_sleep_hours will be excluded here
+  # to keep the formula simple. If interactions with SLD012/SLD013 were desired, 
+  # the interaction_terms list would need to be updated.
+  split_formula_string <- paste(split_formula_string, "+", interaction_string)
+}
+
+# Fit the new robust model
+model_split_sleep <- glm.nb(as.formula(split_formula_string), data = data_analysis)
+
+cat("=== Stage 5: Split Sleep Duration Model Summary (NB-GLM) ===\n\n")
+summary(model_split_sleep)
+```
+
