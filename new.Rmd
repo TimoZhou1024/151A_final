@@ -69,6 +69,24 @@ data$Insomnia <- ifelse(data$Ever_told_by_a_doctor_professional_you_had_trouble_
 data$Sleep_apnea <- ifelse(data$How_often_do_you_snore >= 3 |
                             data$How_often_snort_gasp_or_stop_breathing_during_sleep >= 3, 1, 0)
 #data$Sleep_apnea <- factor(data$Sleep_apnea, levels = c(1, 0), labels = c("yes", "no"))
+
+# Convert lifestyle variables to binary/categorical (Stage 2 covariates)
+# These are typically coded as: 1 = Yes, 2 = No, or ordinal scales 0, 1, 2
+# We convert to binary: 1 = Yes/Present, 0 = No/Absent
+data$Work_vigorous_intensity_activity <- ifelse(data$Work_vigorous_intensity_activity == 1, 1, 0)
+data$Work_moderate_intensity_activity <- ifelse(data$Work_moderate_intensity_activity == 1, 1, 0)
+data$Transport_walk_or_bicycle <- ifelse(data$Transport_walk_or_bicycle == 1, 1, 0)
+data$Recreation_vigorous_intensity_activity <- ifelse(data$Recreation_vigorous_intensity_activity == 1, 1, 0)
+# Secondhand_smoke_exposure_at_home is already 0/1 binary
+
+# Convert medical intervention variables to binary (Stage 3 covariates)
+# Took_any_prescription_medicine: 1 = Yes, 2 = No -> convert to 1 = Yes, 0 = No
+data$Took_any_prescription_medicine <- ifelse(data$Took_any_prescription_medicine == 1, 1, 0)
+
+# Seen_talked_to_a_mental_health_professional: 1 = Yes, 2 = No -> convert to 1 = Yes, 0 = No
+data$Seen_talked_to_a_mental_health_professional <- ifelse(data$Seen_talked_to_a_mental_health_professional == 1, 1, 0)
+
+# Number_of_prescription_medicines is a count variable, keep as numeric
 ```
 
 ```{r}
@@ -579,21 +597,23 @@ if (nrow(significant_interactions) > 0) {
       colors <- rainbow(length(lifestyle_levels))
       for (m in 1:length(lifestyle_levels)) {
 
-        # Create base data frame with mean values
+        # Create base data frame with reference values
+        # For binary variables (0/1), use reference level (0)
+        # For continuous variables, use mean
         new_data <- data.frame(
           Avg_sleep_hours = mean(data_analysis$Avg_sleep_hours, na.rm = TRUE),
-          Insomnia = mean(data_analysis$Insomnia, na.rm = TRUE),
-          Sleep_apnea = mean(data_analysis$Sleep_apnea, na.rm = TRUE),
+          Insomnia = 0,  # Reference level for binary
+          Sleep_apnea = 0,  # Reference level for binary
           Sex = names(sort(table(data_analysis$Sex), decreasing = TRUE))[1],
           Race = names(sort(table(data_analysis$Race), decreasing = TRUE))[1],
           Age_in_years_at_screening = mean(data_analysis$Age_in_years_at_screening, na.rm = TRUE),
           Family_income_to_poverty_ratio = mean(data_analysis$Family_income_to_poverty_ratio, na.rm = TRUE),
           Body_mass_index = mean(data_analysis$Body_mass_index, na.rm = TRUE),
-          Work_vigorous_intensity_activity = mean(data_analysis$Work_vigorous_intensity_activity, na.rm = TRUE),
-          Work_moderate_intensity_activity = mean(data_analysis$Work_moderate_intensity_activity, na.rm = TRUE),
-          Transport_walk_or_bicycle = mean(data_analysis$Transport_walk_or_bicycle, na.rm = TRUE),
-          Recreation_vigorous_intensity_activity = mean(data_analysis$Recreation_vigorous_intensity_activity, na.rm = TRUE),
-          Secondhand_smoke_exposure_at_home = mean(data_analysis$Secondhand_smoke_exposure_at_home, na.rm = TRUE)
+          Work_vigorous_intensity_activity = 0,  # Reference level for binary
+          Work_moderate_intensity_activity = 0,  # Reference level for binary
+          Transport_walk_or_bicycle = 0,  # Reference level for binary
+          Recreation_vigorous_intensity_activity = 0,  # Reference level for binary
+          Secondhand_smoke_exposure_at_home = 0  # Reference level for binary
         )
 
         # Replicate for each sleep_range value
@@ -954,24 +974,26 @@ if (nrow(significant_interactions_s3) > 0) {
 
       for (m in 1:length(medical_levels)) {
 
-        # Create base data frame with mean values
+        # Create base data frame with reference values
+        # For binary variables (0/1), use reference level (0)
+        # For continuous variables, use mean
         new_data <- data.frame(
           Avg_sleep_hours = mean(data_analysis$Avg_sleep_hours, na.rm = TRUE),
-          Insomnia = mean(data_analysis$Insomnia, na.rm = TRUE),
-          Sleep_apnea = mean(data_analysis$Sleep_apnea, na.rm = TRUE),
+          Insomnia = 0,  # Reference level for binary
+          Sleep_apnea = 0,  # Reference level for binary
           Sex = names(sort(table(data_analysis$Sex), decreasing = TRUE))[1],
           Race = names(sort(table(data_analysis$Race), decreasing = TRUE))[1],
           Age_in_years_at_screening = mean(data_analysis$Age_in_years_at_screening, na.rm = TRUE),
           Family_income_to_poverty_ratio = mean(data_analysis$Family_income_to_poverty_ratio, na.rm = TRUE),
           Body_mass_index = mean(data_analysis$Body_mass_index, na.rm = TRUE),
-          Work_vigorous_intensity_activity = mean(data_analysis$Work_vigorous_intensity_activity, na.rm = TRUE),
-          Work_moderate_intensity_activity = mean(data_analysis$Work_moderate_intensity_activity, na.rm = TRUE),
-          Transport_walk_or_bicycle = mean(data_analysis$Transport_walk_or_bicycle, na.rm = TRUE),
-          Recreation_vigorous_intensity_activity = mean(data_analysis$Recreation_vigorous_intensity_activity, na.rm = TRUE),
-          Secondhand_smoke_exposure_at_home = mean(data_analysis$Secondhand_smoke_exposure_at_home, na.rm = TRUE),
-          Took_any_prescription_medicine = mean(data_analysis$Took_any_prescription_medicine, na.rm = TRUE),
+          Work_vigorous_intensity_activity = 0,  # Reference level for binary
+          Work_moderate_intensity_activity = 0,  # Reference level for binary
+          Transport_walk_or_bicycle = 0,  # Reference level for binary
+          Recreation_vigorous_intensity_activity = 0,  # Reference level for binary
+          Secondhand_smoke_exposure_at_home = 0,  # Reference level for binary
+          Took_any_prescription_medicine = 0,  # Reference level for binary
           Number_of_prescription_medicines = mean(data_analysis$Number_of_prescription_medicines, na.rm = TRUE),
-          Seen_talked_to_a_mental_health_professional = mean(data_analysis$Seen_talked_to_a_mental_health_professional, na.rm = TRUE)
+          Seen_talked_to_a_mental_health_professional = 0  # Reference level for binary
         )
 
         # Replicate for each sleep_range value
