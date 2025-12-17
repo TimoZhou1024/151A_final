@@ -782,7 +782,7 @@ interaction_results_s3 <- data.frame(
 
 # --- NEW: 从 model_medical 中提取包含所有 Stage 2 修正项的基准公式 ---
 base_formula_s3 <- as.character(formula(model_medical))[3] 
-
+cat(base_formula_s3)
 # Test each interaction one by one
 for (i in 1:length(sleep_vars)) {
   for (j in 1:length(medical_vars)) {
@@ -1257,40 +1257,73 @@ for (item in phq9_items) {
 
 print(stage4_results, row.names = FALSE, digits = 4)
 ```
+# stage5
+```{r}
+# ==========================================
+# Stage 5: In-Depth Sleep Predictors
+# ==========================================
 
-# Stage5
-```{r stage5-split-sleep-model}
-# Stage 5: Split the averaged sleep variable and fit the robust model
-library(MASS)
-library(car)
-library(dplyr)
+# 1. Prepare variables for Stage 5
+# Instead of Avg_sleep_hours, we use weekday and weekend sleep separately
+# Note: Variables names from dataset2_processed_zero.csv
+data_analysis$Weekday_sleep <- data_analysis$Hours_of_sleep_on_weekdays_workdays
+data_analysis$Weekend_sleep <- data_analysis$Hours_of_sleep_on_weekends_non_workdays
 
-# 1. Create the new base formula by replacing Avg_sleep_hours with SLD012 and SLD013
-# We extract the main effects formula, remove Avg_sleep_hours, and insert the two split variables.
-main_effects_formula <- "Avg_sleep_hours + Insomnia + Sleep_apnea +
-                         Age_in_years_at_screening + Sex + Race + 
-                         Family_income_to_poverty_ratio + Body_mass_index +
-                         Work_vigorous_intensity_activity + Work_moderate_intensity_activity + 
-                         Transport_walk_or_bicycle + Recreation_vigorous_intensity_activity + 
-                         Secondhand_smoke_exposure_at_home + 
-                         Took_any_prescription_medicine + Number_of_prescription_medicines + 
-                         Seen_talked_to_a_mental_health_professional"
-split_main_effects <- gsub("Avg_sleep_hours \\+ ", "", main_effects_formula)
-split_main_effects <- paste("SLD012 + SLD013 +", split_main_effects)
+# 2. Fit the model with separate sleep variables (using Negative Binomial GLM)
+# We keep the covariates from the robust model structure
+stage5_formula_str <- "PHQ9_total ~ Weekday_sleep + Weekend_sleep + Insomnia + Sleep_apnea + 
+                       Sex + Race + Age_in_years_at_screening + 
+                       Family_income_to_poverty_ratio + Body_mass_index + 
+                       Work_vigorous_intensity_activity + Work_moderate_intensity_activity + 
+                       Transport_walk_or_bicycle + Recreation_vigorous_intensity_activity + 
+                       Secondhand_smoke_exposure_at_home"
 
-# 2. Re-create the full formula string with split sleep duration
-split_formula_string <- paste("PHQ9_total ~", split_main_effects)
-if (length(interaction_terms) > 0) {
-  # Note: Existing interaction terms involving Avg_sleep_hours will be excluded here
-  # to keep the formula simple. If interactions with SLD012/SLD013 were desired, 
-  # the interaction_terms list would need to be updated.
-  split_formula_string <- paste(split_formula_string, "+", interaction_string)
-}
+model_stage5 <- MASS::glm.nb(as.formula(stage5_formula_str), data = data_analysis)
 
-# Fit the new robust model
-model_split_sleep <- glm.nb(as.formula(split_formula_string), data = data_analysis)
+cat("=== Stage 5: Model with Separate Weekday and Weekend Sleep ===\n\n")
+summary(model_stage5)
 
-cat("=== Stage 5: Split Sleep Duration Model Summary (NB-GLM) ===\n\n")
-summary(model_split_sleep)
+# 3. Hypothesis Test: Are the coefficients for Weekday and Weekend sleep equal?
+# H0: beta_weekday = beta_weekend
+cat("\n=== Testing Equality of Weekday and Weekend Sleep Coefficients ===\n")
+test_equality <- car::linearHypothesis(model_stage5, "Weekday_sleep = Weekend_sleep")
+print(test_equality)
+```
+
+```{r}
+# 4. Compare Standardized Coefficients for Sleep Predictors
+# To compare the relative importance, we standardize continuous predictors
+data_scaled <- data_analysis %>%
+  mutate(across(c(Weekday_sleep, Weekend_sleep, Age_in_years_at_screening, 
+                  Family_income_to_poverty_ratio, Body_mass_index), 
+                ~ as.vector(scale(.))))
+
+model_stage5_std <- MASS::glm.nb(as.formula(stage5_formula_str), data = data_scaled)
+
+cat("\n=== Standardized Coefficients for Sleep Predictors ===\n")
+std_coefs <- summary(model_stage5_std)$coefficients
+sleep_preds <- c("Weekday_sleep", "Weekend_sleep", "Insomnia", "Sleep_apnea")
+print(std_coefs[rownames(std_coefs) %in% sleep_preds, ])
+
+# 5. Outlier and Influential Point Detection for Stage 5 Model
+cat("\n=== Influence Diagnostics for Stage 5 Model ===\n")
+cooks_d_s5 <- cooks.distance(model_stage5)
+n_s5 <- nrow(data_analysis)
+p_s5 <- length(coef(model_stage5))
+
+# Identify points with high Cook's distance
+influential_s5 <- which(cooks_d_s5 > (4/n_s5)) 
+cat("Number of points with Cook's D > 4/n:", length(influential_s5), "\n")
+
+# Visualization of Cook's Distance
+plot(cooks_d_s5, type = "h", main = "Cook's Distance (Stage 5 Model)", 
+     ylab = "Cook's distance", xlab = "Index")
+abline(h = 4/n_s5, col = "red", lty = 2)
+
+# 6. Model Comparison: Averaged Sleep (Stage 2) vs. Separate Sleep (Stage 5)
+# Using AIC to see if splitting sleep duration improves model fit
+cat("\n=== Model Comparison (AIC) ===\n")
+cat("Stage 2 Model (Averaged Sleep) AIC:", round(AIC(model_lifestyle), 2), "\n")
+cat("Stage 5 Model (Separate Sleep) AIC:", round(AIC(model_stage5), 2), "\n")
 ```
 
