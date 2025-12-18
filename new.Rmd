@@ -22,6 +22,14 @@ library(MASS)      # For Negative Binomial (glm.nb)
 library(broom)     # For tidy model outputs
 library(gridExtra) # For arranging plots
 library(DHARMa)
+
+# Create figures directory if it doesn't exist
+if (!dir.exists("figures")) {
+  dir.create("figures")
+  cat("Created figures directory\n")
+} else {
+  cat("Figures directory already exists\n")
+}
 ```
 
 ```{r}
@@ -155,6 +163,24 @@ hist(data_analysis$Avg_sleep_hours,
      xlab = "Average Sleep Hours",
      col = "darkgreen",
      border = "white")
+
+# Export figure
+png("figures/phq9_distribution.png", width = 1200, height = 600)
+par(mfrow = c(1, 2))
+hist(data_analysis$PHQ9_total,
+     breaks = 28,
+     main = "Distribution of PHQ-9 Total Score",
+     xlab = "PHQ-9 Total Score (0-27)",
+     col = "steelblue",
+     border = "white")
+hist(data_analysis$Avg_sleep_hours,
+     breaks = 20,
+     main = "Distribution of Average Sleep Hours",
+     xlab = "Average Sleep Hours",
+     col = "darkgreen",
+     border = "white")
+dev.off()
+cat("Figure saved: figures/phq9_distribution.png\n")
 ```
 
 ```{r}
@@ -181,6 +207,26 @@ boxplot(PHQ9_total ~ Insomnia, data = data_analysis,
         ylab = "PHQ-9 Total Score",
         main = "PHQ-9 by Insomnia Status",
         col = c("lightblue", "salmon"))
+
+# Export figure
+png("figures/sleep_phq9_loess.png", width = 1200, height = 600)
+par(mfrow = c(1, 2))
+plot(data_analysis$Avg_sleep_hours, data_analysis$PHQ9_total,
+     pch = 16, col = rgb(0, 0, 0, 0.1),
+     xlab = "Average Sleep Hours",
+     ylab = "PHQ-9 Total Score",
+     main = "Sleep Duration vs Depression Severity")
+loess_fit2 <- loess(PHQ9_total ~ Avg_sleep_hours, data = data_analysis)
+lines(sleep_seq, predict(loess_fit2, data.frame(Avg_sleep_hours = sleep_seq)),
+      col = "red", lwd = 2)
+boxplot(PHQ9_total ~ Insomnia, data = data_analysis,
+        names = c("No Insomnia", "Insomnia"),
+        xlab = "Insomnia Status",
+        ylab = "PHQ-9 Total Score",
+        main = "PHQ-9 by Insomnia Status",
+        col = c("lightblue", "salmon"))
+dev.off()
+cat("Figure saved: figures/sleep_phq9_loess.png\n")
 ```
 
 ```{r}
@@ -228,10 +274,7 @@ simulationOutput <- DHARMa::simulateResiduals(fittedModel = model_base_final, pl
 
 par(mfrow = c(1, 2))
 # 1. DHARMa Residuals vs Predicted (Checks linearity/functional form)
-plot(simulationOutput, what = "predictedResiduals", caption = "GLM Residuals vs. Fitted Values (DHARMa)")
-
-# 2. DHARMa QQ Plot (Checks residual distribution/model family)
-plot(simulationOutput, what = "qqPlot", caption = "GLM QQ Plot")
+plot(simulationOutput, asFactor = FALSE)
 
 # Print Dispersion and Outlier tests results
 cat("\n=== DHARMa Test Results (Negative Binomial) ===\n")
@@ -242,6 +285,13 @@ cat("1. Residuals vs Fitted: Red line should be flat and near the center (y=0.5)
 cat("2. QQ Plot: Dots should lie on the diagonal line (uniform distribution).\n")
 cat("3. Dispersion Test p-value: If < 0.05, the model has significant *additional* overdispersion.\n")
 cat("4. Outlier Test p-value: If < 0.05, there are significant outliers/high-leverage points.\n")
+
+# Export DHARMa diagnostics
+png("figures/dharma_diagnostics.png", width = 1200, height = 600)
+par(mfrow = c(1, 2))
+plot(simulationOutput, asFactor = FALSE)
+dev.off()
+cat("Figure saved: figures/dharma_diagnostics.png\n")
 ```
 
 Base Model Interpretation
@@ -1090,8 +1140,129 @@ cat("Note: Since this is a Negative Binomial GLM, standard OLS residual plots (l
 # Plotting Cook's Distance is still relevant
 par(mfrow = c(1, 1))
 plot(model_medical_final, which = 4, main = "Cook's Distance (Stage 3 GLM.NB)")
+
+# Export Cook's Distance plot for Stage 3
+png("figures/cook_distance_stage3.png", width = 800, height = 600)
+plot(model_medical_final, which = 4, main = "Cook's Distance (Stage 3 GLM.NB)")
+abline(h = 4/nrow(data_analysis), col = "red", lty = 2, lwd = 2)
+text(x = par("usr")[2] * 0.7, y = 4/nrow(data_analysis) * 1.3,
+     labels = paste("Threshold: 4/n =", round(4/nrow(data_analysis), 6)),
+     col = "red", pos = 3)
+dev.off()
+cat("Figure saved: figures/cook_distance_stage3.png\n")
 ```
+
 Robustness Check: Model Without Influential Points
+```{r}
+# ========================================
+# Stage 3: Robustness Check - Removing Influential Points
+# ========================================
+
+cat("\n=== Stage 3 Robustness Test: Model Without Influential Points ===\n\n")
+
+# 1. Identify influential points using Cook's D > 4/n threshold
+cooks_d_s3 <- cooks.distance(model_medical_final)
+n_s3 <- nrow(data_analysis)
+threshold_s3 <- 4/n_s3
+
+influential_idx_s3 <- which(cooks_d_s3 > threshold_s3)
+cat("Cook's Distance threshold (4/n):", round(threshold_s3, 6), "\n")
+cat("Number of influential points identified:", length(influential_idx_s3), "\n")
+cat("Percentage of data:", round(length(influential_idx_s3) / n_s3 * 100, 2), "%\n\n")
+
+# Display some information about influential points
+if (length(influential_idx_s3) > 0) {
+  cat("Observation indices of influential points (first 20):\n")
+  print(head(influential_idx_s3, 20))
+
+  cat("\nCook's Distance values for most influential points:\n")
+  top_influential_s3 <- sort(cooks_d_s3, decreasing = TRUE)[1:min(10, length(influential_idx_s3))]
+  print(round(top_influential_s3, 6))
+
+  # 2. Create dataset without influential points
+  data_robust_s3 <- data_analysis[-influential_idx_s3, ]
+  cat("\nOriginal sample size:", n_s3, "\n")
+  cat("Robust sample size:", nrow(data_robust_s3), "\n\n")
+
+  # 3. Refit Stage 3 final model on cleaned data
+  cat("=== Refitting Stage 3 Final Model Without Influential Points ===\n")
+
+  # Use the same formula as model_medical_final
+  model_medical_robust <- MASS::glm.nb(formula(model_medical_final), data = data_robust_s3)
+
+  cat("\nRobust Model AIC:", round(AIC(model_medical_robust), 2), "\n")
+  cat("Robust Model BIC:", round(BIC(model_medical_robust), 2), "\n\n")
+
+  # 4. Compare coefficients: original vs robust model
+  cat("\n=== Comparison: Original vs Robust Model Coefficients ===\n\n")
+
+  # Extract coefficients for sleep variables
+  coefs_original_s3 <- summary(model_medical_final)$coefficients
+  coefs_robust_s3 <- summary(model_medical_robust)$coefficients
+
+  sleep_vars_s3 <- c("Avg_sleep_hours", "Insomnia", "Sleep_apnea")
+
+  comparison_table_s3 <- data.frame(
+    Variable = character(),
+    Original_Estimate = numeric(),
+    Robust_Estimate = numeric(),
+    Difference = numeric(),
+    Pct_Change = numeric(),
+    Original_pvalue = numeric(),
+    Robust_pvalue = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  for (var in sleep_vars_s3) {
+    if (var %in% rownames(coefs_original_s3) && var %in% rownames(coefs_robust_s3)) {
+      orig_est <- coefs_original_s3[var, "Estimate"]
+      robust_est <- coefs_robust_s3[var, "Estimate"]
+      diff <- robust_est - orig_est
+      pct_change <- (diff / orig_est) * 100
+
+      comparison_table_s3 <- rbind(comparison_table_s3,
+                                   data.frame(
+                                     Variable = var,
+                                     Original_Estimate = orig_est,
+                                     Robust_Estimate = robust_est,
+                                     Difference = diff,
+                                     Pct_Change = pct_change,
+                                     Original_pvalue = coefs_original_s3[var, "Pr(>|z|)"],
+                                     Robust_pvalue = coefs_robust_s3[var, "Pr(>|z|)"],
+                                     stringsAsFactors = FALSE
+                                   ))
+    }
+  }
+
+  cat("Sleep Variable Coefficient Comparison:\n")
+  print(comparison_table_s3, digits = 4, row.names = FALSE)
+
+  # 5. Statistical comparison summary
+  cat("\n=== Robustness Assessment ===\n")
+  max_pct_change <- max(abs(comparison_table_s3$Pct_Change))
+  cat("Maximum percentage change in sleep coefficients:", round(max_pct_change, 2), "%\n")
+
+  if (max_pct_change < 10) {
+    cat("Conclusion: Model is ROBUST. Key sleep coefficients changed by less than 10%.\n")
+  } else if (max_pct_change < 20) {
+    cat("Conclusion: Model is MODERATELY ROBUST. Some coefficients changed by 10-20%.\n")
+  } else {
+    cat("Conclusion: Model shows SENSITIVITY to influential points (>20% change).\n")
+  }
+
+  # 6. Compare model fit statistics
+  cat("\n=== Model Fit Comparison ===\n")
+  cat("Original Model AIC:", round(AIC(model_medical_final), 2), "\n")
+  cat("Robust Model AIC:", round(AIC(model_medical_robust), 2), "\n")
+  cat("AIC Change:", round(AIC(model_medical_robust) - AIC(model_medical_final), 2), "\n\n")
+  cat("Original Model BIC:", round(BIC(model_medical_final), 2), "\n")
+  cat("Robust Model BIC:", round(BIC(model_medical_robust), 2), "\n")
+  cat("BIC Change:", round(BIC(model_medical_robust) - BIC(model_medical_final), 2), "\n")
+
+} else {
+  cat("No influential points detected with Cook's D > 4/n threshold.\n")
+}
+```
 
 # Summary of Stages 1-3
 ```{r}
@@ -1316,14 +1487,142 @@ influential_s5 <- which(cooks_d_s5 > (4/n_s5))
 cat("Number of points with Cook's D > 4/n:", length(influential_s5), "\n")
 
 # Visualization of Cook's Distance
-plot(cooks_d_s5, type = "h", main = "Cook's Distance (Stage 5 Model)", 
+plot(cooks_d_s5, type = "h", main = "Cook's Distance (Stage 5 Model)",
      ylab = "Cook's distance", xlab = "Index")
 abline(h = 4/n_s5, col = "red", lty = 2)
+
+# Export Cook's Distance plot for Stage 5
+png("figures/cook_distance_stage5.png", width = 800, height = 600)
+plot(cooks_d_s5, type = "h", main = "Cook's Distance (Stage 5 Model)",
+     ylab = "Cook's distance", xlab = "Observation Index")
+abline(h = 4/n_s5, col = "red", lty = 2, lwd = 2)
+text(x = length(cooks_d_s5) * 0.7, y = 4/n_s5 * 1.5,
+     labels = paste("Threshold: 4/n =", round(4/n_s5, 6)), col = "red", pos = 3)
+dev.off()
+cat("Figure saved: figures/cook_distance_stage5.png\n")
 
 # 6. Model Comparison: Averaged Sleep (Stage 2) vs. Separate Sleep (Stage 5)
 # Using AIC to see if splitting sleep duration improves model fit
 cat("\n=== Model Comparison (AIC) ===\n")
 cat("Stage 2 Model (Averaged Sleep) AIC:", round(AIC(model_lifestyle), 2), "\n")
 cat("Stage 5 Model (Separate Sleep) AIC:", round(AIC(model_stage5), 2), "\n")
+```
+
+```{r}
+# ========================================
+# Stage 5: Robustness Check - Removing Influential Points
+# ========================================
+
+cat("\n=== Stage 5 Robustness Test: Model Without Influential Points ===\n\n")
+
+# 1. Identify influential points using Cook's D > 4/n threshold
+threshold_s5 <- 4/n_s5
+
+cat("Cook's Distance threshold (4/n):", round(threshold_s5, 6), "\n")
+cat("Number of influential points identified:", length(influential_s5), "\n")
+cat("Percentage of data:", round(length(influential_s5) / n_s5 * 100, 2), "%\n\n")
+
+# Display information about influential points
+if (length(influential_s5) > 0) {
+  cat("Observation indices of influential points (first 20):\n")
+  print(head(influential_s5, 20))
+
+  cat("\nCook's Distance values for most influential points:\n")
+  top_influential_s5 <- sort(cooks_d_s5, decreasing = TRUE)[1:min(10, length(influential_s5))]
+  print(round(top_influential_s5, 6))
+
+  # 2. Create dataset without influential points
+  data_robust_s5 <- data_analysis[-influential_s5, ]
+  cat("\nOriginal sample size:", n_s5, "\n")
+  cat("Robust sample size:", nrow(data_robust_s5), "\n\n")
+
+  # 3. Refit Stage 5 model on cleaned data
+  cat("=== Refitting Stage 5 Model Without Influential Points ===\n")
+
+  model_stage5_robust <- MASS::glm.nb(formula(model_stage5), data = data_robust_s5)
+
+  cat("\nRobust Model AIC:", round(AIC(model_stage5_robust), 2), "\n")
+  cat("Robust Model BIC:", round(BIC(model_stage5_robust), 2), "\n\n")
+
+  # 4. Compare weekday/weekend sleep coefficients: original vs robust
+  cat("\n=== Comparison: Original vs Robust Model Coefficients ===\n\n")
+
+  coefs_original_s5 <- summary(model_stage5)$coefficients
+  coefs_robust_s5 <- summary(model_stage5_robust)$coefficients
+
+  sleep_vars_s5 <- c("Weekday_sleep", "Weekend_sleep", "Insomnia", "Sleep_apnea")
+
+  comparison_table_s5 <- data.frame(
+    Variable = character(),
+    Original_Estimate = numeric(),
+    Robust_Estimate = numeric(),
+    Difference = numeric(),
+    Pct_Change = numeric(),
+    Original_pvalue = numeric(),
+    Robust_pvalue = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  for (var in sleep_vars_s5) {
+    if (var %in% rownames(coefs_original_s5) && var %in% rownames(coefs_robust_s5)) {
+      orig_est <- coefs_original_s5[var, "Estimate"]
+      robust_est <- coefs_robust_s5[var, "Estimate"]
+      diff <- robust_est - orig_est
+      pct_change <- (diff / orig_est) * 100
+
+      comparison_table_s5 <- rbind(comparison_table_s5,
+                                   data.frame(
+                                     Variable = var,
+                                     Original_Estimate = orig_est,
+                                     Robust_Estimate = robust_est,
+                                     Difference = diff,
+                                     Pct_Change = pct_change,
+                                     Original_pvalue = coefs_original_s5[var, "Pr(>|z|)"],
+                                     Robust_pvalue = coefs_robust_s5[var, "Pr(>|z|)"],
+                                     stringsAsFactors = FALSE
+                                   ))
+    }
+  }
+
+  cat("Sleep Variable Coefficient Comparison:\n")
+  print(comparison_table_s5, digits = 4, row.names = FALSE)
+
+  # 5. Re-test equality hypothesis on robust model
+  cat("\n=== Re-Testing Weekday vs Weekend Sleep Equality (Robust Model) ===\n")
+  test_equality_robust <- car::linearHypothesis(model_stage5_robust, "Weekday_sleep = Weekend_sleep")
+  print(test_equality_robust)
+
+  # Compare with original test
+  test_equality_original <- car::linearHypothesis(model_stage5, "Weekday_sleep = Weekend_sleep")
+
+  cat("\nComparison of Equality Tests:\n")
+  cat("Original model p-value:", format(test_equality_original$`Pr(>Chisq)`[2], digits = 4), "\n")
+  cat("Robust model p-value:", format(test_equality_robust$`Pr(>Chisq)`[2], digits = 4), "\n")
+
+  # 6. Statistical comparison summary
+  cat("\n=== Robustness Assessment ===\n")
+  max_pct_change <- max(abs(comparison_table_s5$Pct_Change))
+  cat("Maximum percentage change in sleep coefficients:", round(max_pct_change, 2), "%\n")
+
+  if (max_pct_change < 10) {
+    cat("Conclusion: Model is ROBUST. Key sleep coefficients changed by less than 10%.\n")
+  } else if (max_pct_change < 20) {
+    cat("Conclusion: Model is MODERATELY ROBUST. Some coefficients changed by 10-20%.\n")
+  } else {
+    cat("Conclusion: Model shows SENSITIVITY to influential points (>20% change).\n")
+  }
+
+  # 7. Compare model fit statistics
+  cat("\n=== Model Fit Comparison ===\n")
+  cat("Original Model AIC:", round(AIC(model_stage5), 2), "\n")
+  cat("Robust Model AIC:", round(AIC(model_stage5_robust), 2), "\n")
+  cat("AIC Change:", round(AIC(model_stage5_robust) - AIC(model_stage5), 2), "\n\n")
+  cat("Original Model BIC:", round(BIC(model_stage5), 2), "\n")
+  cat("Robust Model BIC:", round(BIC(model_stage5_robust), 2), "\n")
+  cat("BIC Change:", round(BIC(model_stage5_robust) - BIC(model_stage5), 2), "\n")
+
+} else {
+  cat("No influential points detected with Cook's D > 4/n threshold.\n")
+}
 ```
 
