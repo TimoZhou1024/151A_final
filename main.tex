@@ -31,18 +31,20 @@
 
 \section*{Final Regression Model \& Analysis}
 \subsection*{Choice of Model}
-After a series of tryouts and evaluation, eventually we decide to apply Negative Binomial (NB) Regression to our dataset. Negative Binomial Regression is a type of Generalized Linear Model (GLM) specifically designed for count data. Specifically, we choose this model for three main reasons:\\
+After a series of iterations and evaluation, eventually we decide to apply Negative Binomial (NB) Regression to our dataset. Negative Binomial Regression is a type of Generalized Linear Model (GLM) specifically designed for count data. Specifically, we choose this model for three main reasons:\\
 (1)Count Outcome: The PHQ-9 total score is a sum of discrete items (0-27), making it a count variable rather than a truly continuous one.\\
-(2)Skewness and Bunch of Zeros: Based on our EDA, PHQ9 total scores in the general population (NHANES) are typically highly right-skewed with many zero or low scores. NB regression handles this distribution more effectively than standard linear regression.\\
+(2)Skewness and many Zeros: Based on our EDA, PHQ-9 total scores in the general population (NHANES) are typically highly right-skewed with many zero or low scores. NB regression handles this distribution more effectively than standard linear regression.\\
 (3)Statistical Validity: It addresses the overdispersion likely present in mental health data, ensuring that standard errors and p-values are not underestimated, which leads to more reliable conclusions about the associations between sleep quality and depression.\\
-Note: In the NB model, there is kind of a log transformation to the response(it's not pure log transformation since it handles the value of zero well). In other words, we are fitting at the log scale of the original data.
+Note: In the NB model, we use a log-link function, meaning predictors are modeled as having multiplicative effects on the expected PHQ-9 score on the original scale.
+
 \subsection*{Final Model Variables}
-In our final model, the response is the total scores of the PHQ9 Questionnaire, which measures a person's depression level(higher scores indicate more serious depression). The main regressors are sleep duration, whether showing symptoms of insomnia and whether showing symptoms of snoring or gasping. The demographic covariates include age, gender, race, income-to-poverty ratio and BMI. We also add other two types of explanatory variables to the model--lifestyles(including transport, intensity of work activities and intensity of recreation activities) and interventions(including whether taking medicines, number of medicines and whether seeking professional help from therapists). Lastly, the model includes several interaction terms, which describes the interaction effects for the following pairs of variables:
+In our final model, the response is the total scores of the PHQ-9 Questionnaire, which measures a person's depression level (higher scores indicate more serious depression). The main regressors are sleep duration, whether showing symptoms of insomnia and whether showing symptoms of snoring or gasping. The demographic covariates include age, gender, race, income-to-poverty ratio and BMI. We also add other two types of explanatory variables to the model--lifestyles(including transport, intensity of work activities and intensity of recreation activities) and interventions(including whether taking medicines, number of medicines and whether seeking professional help from therapists). The final model also includes several interaction terms to capture effect modification between key variables. Specifically, we include interactions between:
+
 \begin{itemize}
-    \item whether showing symptoms of insomnia and intensity of work activities
-    \item whether showing symptoms of insomnia and whether taking medicines
-     \item whether showing symptoms of insomnia and number of medicines
-    \item sleep duration and number of medicines
+    \item insomnia status and work intensity,
+    \item insomnia status and prescription medicine use,
+     \item insomnia status and the number of prescription medications, and
+    \item sleep duration and the number of prescription medicines.
 \end{itemize}
 
 \subsection*{Analysis of the Model Results}
@@ -65,7 +67,8 @@ The last result might seem surprising at first glance, but it actually makes sen
 \subsubsection*{Interaction Effects} 
 In general, we have found four significant interaction effects, which can be stated as follows:
 \begin{itemize}
-    \item There is a significant negative interaction (estimate of beta is -0.201) between insomnia and the usage of prescription medicines. While insomnia is strongly associated with higher PHQ-9 scores overall, taking prescription medication significantly mitigates this impact. Specifically, among individuals with insomnia, those who take prescription medicines have a log-expected PHQ-9 score that is 0.201 units lower than those who do not. This translates to an approximate 18.2\% reduction in depression severity for medicated insomniacs compared to unmedicated insomniacs, holding other variables constant. 
+    \item There is a significant negative interaction (estimate of beta is -0.201) between insomnia and the usage of prescription medicines. While insomnia is strongly associated with higher PHQ-9 scores overall, taking prescription medication significantly mitigates this impact. Specifically, among individuals with insomnia, those who take prescription medicines have a log-expected PHQ-9 score that is 0.201 units lower than those who do not. This corresponds to $\exp(-0.201)\approx 0.82$, i.e., about an 18\% lower expected PHQ-9 score among medicated individuals with insomnia compared to unmedicated individuals with insomnia, holding other variables constant.
+
     \item Consistent with the binary finding, we observe a significant "dose-response" interaction (estimate of beta is -0.035). For individuals suffering from insomnia, each additional prescription medication is associated with a further 0.035 decrease in the log-expected PHQ-9 score. This suggests a cumulative buffering effect: as the intensity of medical intervention (proxied by the number of prescriptions) increases, the positive association between insomnia and depressive symptoms is progressively dampened.
     \item Again, for those who show symptoms of insomnia, there is a 0.2118190-unit decrease in the log-expected PHQ-9 score when their work intensity is one unit larger.
     This is actually interesting since higher work intensity alone is associated with higher PHQ-9 scores, yet only focusing on people with insomnia the story becomes sightly different.
@@ -73,73 +76,33 @@ In general, we have found four significant interaction effects, which can be sta
 \end{itemize}
 \subsection*{Analysis Limitations}
 \begin{itemize}
-    \item Standardized coefficients are not fully representable of variables' contributions to the model, especially when there is colinearity/high correlation among some variables. 
+    \item Standardized coefficients are not fully representable of variables' contributions to the model, especially when there is collinearity/high correlation among some variables. 
     \item We did not blend the dataset with the sample weight, thus some conclusions derived from our model might not generalize well among the actual population.
-    \item There are still a lot of potential confunders that 
+    \item There are still a lot of potential confounders that 
     we didn't consider. For this reason, our model is still not robust enough for casual inference.
+    \item Because NHANES is cross-sectional, our results should be interpreted as associations rather than causal effects, and reverse causality (e.g., depression influencing sleep) cannot be ruled out.
 \end{itemize}
 
 \section*{Research Conclusions and Insight}
 
 \subsection*{Conclusions}
-
-This study investigated the associations between multiple dimensions of sleep quality and depressive symptom severity (PHQ-9 scores) in a large, nationally representative sample of U.S. adults from NHANES 2017-2020. Using Negative Binomial regression to appropriately model the count-based, overdispersed nature of depression scores, we identified three primary sleep-related predictors with robust, statistically significant associations:
-
-\begin{enumerate}
-    \item \textbf{Sleep Duration:} Each additional hour of average sleep per night was associated with a 6.9\% decrease in expected PHQ-9 score (coefficient = -0.069, p < 0.001), after full adjustment for demographics, lifestyle, and medical factors. While this effect is modest compared to other sleep variables, it underscores the importance of adequate sleep quantity in mental health.
-
-    \item \textbf{Insomnia (Physician-Diagnosed Sleep Trouble):} Individuals with diagnosed insomnia had an expected PHQ-9 score more than twice as high as those without insomnia (coefficient = 0.741, corresponding to an incidence rate ratio of $e^{0.741} \approx 2.10$, p < 0.001). Insomnia emerged as the strongest and most consistent predictor across all model stages, with standardized coefficients indicating it contributes most to explained variance in depression severity.
-
-    \item \textbf{Sleep Apnea Symptoms (Frequent Snoring/Gasping):} Frequent snoring or gasping during sleep was associated with a 17\% increase in expected PHQ-9 score (coefficient = 0.158, p < 0.001). This association persisted even after controlling for BMI, suggesting that sleep-disordered breathing has mental health consequences independent of obesity.
-\end{enumerate}
-
-\textbf{Interaction Effects and Context-Dependence:}
-
-The relationship between sleep and depression is not uniform but modulated by lifestyle and medical interventions. Key interaction findings include:
-
 \begin{itemize}
-    \item Among individuals with insomnia, taking prescription medication significantly attenuated the positive association with depression (interaction coefficient = -0.201, p < 0.001), suggesting that pharmacological treatment can meaningfully reduce the mental health burden of insomnia.
+    \item Our analysis provides strong evidence of an association between sleep-related variables and depressive symptom severity among U.S. adults. Among the sleep variables considered, sleep duration shows a comparatively weaker association with PHQ-9 scores, while indicators of sleep quality - particularly diagnosed insomnia-exhibit much stronger relationships with depression severity. Individuals reporting insomnia or frequent snoring/gasping tend to have substantially higher expected PHQ-9 scores after adjusting for demographic, lifestyle, and medical factors.
 
-    \item Higher work intensity (vigorous physical activity at work) also mitigated the insomnia-depression link (interaction coefficient = -0.212, p < 0.01), highlighting the potential protective role of physical activity even in the context of sleep disturbance.
-
-    \item A dose-response pattern was observed: each additional prescription medication further reduced the insomnia-related depression burden (interaction coefficient = -0.035, p < 0.01), suggesting cumulative benefits of more intensive medical management.
+    \item The association between sleep quality and depression is not uniform across individuals but varies meaningfully with lifestyle behaviors and medical interventions. In particular, among individuals with insomnia, both prescription medication use and higher work-related physical activity are associated with lower expected PHQ-9 scores, suggesting that the relationship between insomnia and depression severity is context-dependent rather than constant across the population.
 \end{itemize}
 
-These interactions reveal that the sleep-depression relationship is dynamic and modifiable, providing actionable targets for clinical and public health interventions.
+\newpage{}
 
 \subsection*{Recommendations and Insights}
-
-\textbf{Clinical Implications:}
-
 \begin{itemize}
-    \item \textbf{Screen for Sleep Disorders in Depression Assessment:} Given the strong independent associations between insomnia, sleep apnea, and depression, clinicians should routinely screen for sleep disturbances when evaluating patients with depressive symptoms.
 
-    \item \textbf{Treat Sleep Problems as a Priority:} The significant interaction effects suggest that treating insomnia—whether pharmacologically or via cognitive-behavioral therapy for insomnia (CBT-I)—may yield mental health benefits beyond sleep improvement alone. Our findings support integrated care models that address sleep and mood simultaneously.
+    \item From a clinical and screening perspective, our findings suggest that measures of sleep quality—particularly insomnia symptoms—may be more informative indicators of depression severity than sleep duration alone. Incorporating targeted sleep-quality questions into routine mental health screening could help identify individuals at elevated risk for depressive symptoms.
 
-    \item \textbf{Promote Physical Activity:} The protective interaction between work intensity and insomnia highlights that physical activity may buffer some adverse mental health effects of poor sleep. Encouraging patients to maintain regular physical activity, even when experiencing sleep difficulties, could be a valuable non-pharmacological adjunct.
+    \item The presence of significant interaction effects highlights that associations between sleep and depression are heterogeneous across individuals. Lifestyle behaviors and medical interventions appear to modify the relationship between insomnia and depressive symptoms, suggesting that personalized or context-aware approaches may be more effective than uniform recommendations.
+
+    \item At a population-health level, these results emphasize the importance of considering sleep disturbances within a broader behavioral and treatment context. While sleep duration remains relevant, interventions aimed at improving sleep quality or managing insomnia may offer greater potential benefit for mitigating depressive symptom burden.
 \end{itemize}
-
-\textbf{Public Health and Policy Implications:}
-
-\begin{itemize}
-    \item \textbf{Sleep Hygiene Education:} Public health campaigns emphasizing sleep hygiene—adequate sleep duration, consistent sleep schedules, and management of sleep disorders—could have downstream benefits for population mental health.
-
-    \item \textbf{Workplace Wellness Programs:} Employers could incorporate sleep health into wellness initiatives, recognizing that workplace physical activity and stress management may mitigate the mental health toll of poor sleep among employees.
-
-    \item \textbf{Healthcare Access:} Ensuring access to sleep medicine specialists and cognitive-behavioral therapy for insomnia (CBT-I) could reduce the population burden of depression, particularly among underserved groups with high rates of untreated sleep disorders.
-\end{itemize}
-
-\textbf{Study Limitations:}
-
-\begin{itemize}
-    \item \textbf{Causal Inference:} This is a cross-sectional observational study, so we cannot definitively establish causality. Sleep problems may cause depression, depression may cause sleep problems, or both may share common underlying causes.
-
-    \item \textbf{Unmeasured Confounding:} Despite extensive adjustment, residual confounding from unmeasured variables (e.g., childhood adversity, social support, genetic factors) may remain.
-
-    \item \textbf{Survey Weights:} We did not incorporate NHANES survey weights in this analysis, which may limit the generalizability of point estimates to the U.S. population.
-\end{itemize}
-
-In summary, this study provides robust evidence that sleep quality—particularly insomnia and sleep apnea symptoms—is strongly associated with depressive symptom severity in U.S. adults. The findings underscore the importance of integrated assessment and treatment of sleep and mood disorders, and highlight modifiable lifestyle and medical factors that can mitigate the mental health consequences of poor sleep.
 
 \section*{Additional Work}
 \subsection*{Additional Models Fitted}
@@ -227,7 +190,7 @@ Cook's Distance measures how much the fitted model would change if a particular 
 
 \textbf{Robustness Checks:}
 
-To assess whether our substantive conclusions depend on these influential observations, we conducted formal robustness tests by refitting the Stage 3 and Stage 5 models after removing points with Cook's D > 4/n.
+To assess whether our substantive conclusions depend on these influential observations, we conducted formal robustness tests by refitting the Stage 3 and Stage 5 models after removing points with Cook's $D > 4/n$.
 
 \textit{Stage 3 Robustness Results:}
 % After removing influential points, the three main sleep variable coefficients changed by less than 10\%, confirming that our inferences are robust to these observations. All p-values remained highly significant, and the direction and magnitude of effects were substantively unchanged.
@@ -243,77 +206,72 @@ Removing influential points resulted in slight coefficient changes for weekday a
 
 \begin{figure}[h]
 \centering
-% To generate: Run new.Rmd, figure exported at line 290-294
-\includegraphics[width=0.9\textwidth]{figures/dharma_diagnostics.png}
-\caption{DHARMa diagnostic plots for the Negative Binomial GLM. Left: QQ plot showing scaled residuals follow the expected uniform distribution. Right: Residuals vs. fitted values showing no systematic pattern, confirming correct mean structure specification. These plots validate our choice of the NB-GLM model over linear regression.}
+\includegraphics[width=0.85\textwidth]{figures/dharma_diagnostics.png}
+\caption{DHARMa diagnostics: QQ plot (left) and residuals vs. fitted (right) validate NB-GLM assumptions.}
 \label{fig:dharma}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-% To generate: Run new.Rmd, figure exported at line 168-183
-\includegraphics[width=0.9\textwidth]{figures/phq9_distribution.png}
-\caption{Distribution of PHQ-9 total scores (left) and average sleep hours (right) in the analysis sample. The right-skewed, count nature of PHQ-9 with many low scores motivated the use of Negative Binomial regression rather than OLS.}
-\label{fig:phq9_dist}
+\includegraphics[width=0.85\textwidth]{figures/phq9_distribution.png}
+\caption{Distribution of PHQ-9 scores and sleep hours showing right-skewed count data.}
+\label{fig:PHQ-9_dist}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-% To generate: Run new.Rmd, figure exported at line 212-229
-\includegraphics[width=0.9\textwidth]{figures/sleep_phq9_loess.png}
-\caption{Left: Bivariate relationship between average sleep hours and PHQ-9 scores with LOESS smooth (red line) showing a U-shaped pattern. Right: Boxplot comparing PHQ-9 scores by insomnia status, demonstrating substantially higher depression scores among those with diagnosed insomnia.}
-\label{fig:sleep_phq9}
+\includegraphics[width=0.85\textwidth]{figures/sleep_phq9_loess.png}
+\caption{Sleep-PHQ-9 relationship (left: LOESS smooth; right: insomnia comparison).}
+\label{fig:sleep_PHQ-9}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-% To generate: Run new.Rmd, Stage 3 figure exported at line 1145-1152
-\includegraphics[width=0.7\textwidth]{figures/cook_distance_stage3.png}
-\caption{Cook's Distance plot for Stage 3 model (medical intervention covariates included). Red dashed line indicates the 4/n threshold for identifying influential observations. Points above this threshold were removed in robustness checks to verify model stability.}
+\includegraphics[width=0.6\textwidth]{figures/cook_distance_stage3.png}
+\caption{Cook's Distance for Stage 3 (4/n threshold shown).}
 \label{fig:cook_stage3}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-% To generate: Run new.Rmd, Stage 5 figure exported at line 1495-1502
-\includegraphics[width=0.7\textwidth]{figures/cook_distance_stage5.png}
-\caption{Cook's Distance plot for Stage 5 model (split weekday/weekend sleep). Red dashed line indicates the 4/n threshold. Robustness checks confirmed that removing these influential points did not materially change substantive conclusions about weekday vs. weekend sleep effects.}
+\includegraphics[width=0.6\textwidth]{figures/cook_distance_stage5.png}
+\caption{Cook's Distance for Stage 5 (4/n threshold shown).}
 \label{fig:cook_stage5}
 \end{figure}
 
-\clearpage
-
 \begin{table}[h]
 \centering
-\caption{Model comparison using AIC and BIC across stages}
+\caption{Model comparison across stages}
 \label{tab:model_comparison}
+\small
 \begin{tabular}{lcccc}
 \hline
-\textbf{Model Stage} & \textbf{Variables Added} & \textbf{AIC} & \textbf{BIC} & \textbf{$\Delta$AIC} \\
+\textbf{Stage} & \textbf{Variables} & \textbf{AIC} & \textbf{BIC} & \textbf{$\Delta$AIC} \\
 \hline
-Stage 1 & Sleep + Demographics & 40524.21 & 40625.34 & -- \\
-Stage 2 & + Lifestyle & 40462.98 & 40607.45 & -61.23 \\
-Stage 3 & + Medical & 40271.04 & 40444.41 & -191.94 \\
+1 & Sleep + Demographics & 40524.21 & 40625.34 & -- \\
+2 & + Lifestyle & 40462.98 & 40607.45 & -61.23 \\
+3 & + Medical & 40271.04 & 40444.41 & -191.94 \\
 \hline
 \end{tabular}
 \end{table}
 
 \begin{table}[h]
 \centering
-\caption{Robustness check: Original vs. robust model coefficients for sleep variables}
+\caption{Robustness check coefficients}
 \label{tab:robust}
+\small
 \begin{tabular}{lcccc}
 \hline
 \textbf{Variable} & \textbf{Original $\beta$} & \textbf{Robust $\beta$} & \textbf{Change (\%)} & \textbf{p-value} \\
 \hline
-\multicolumn{5}{c}{\textit{Stage 3 Model (Medical Covariates)}} \\
-Avg sleep hours & -0.06948 & -0.09062 & 30.43 & <0.001 \\
-Insomnia & 0.74061 & 0.91693 & 23.81 & <0.001 \\
-Sleep apnea & 0.15766 & 0.11482 & -27.17 & <0.001 \\
+\multicolumn{5}{c}{\textit{Stage 3}} \\
+Avg sleep hours & -0.06948 & -0.09062 & 30.43 & 5.113e-13 \\
+Insomnia & 0.74061 & 0.91693 & 23.81 & 2.060e-94 \\
+Sleep apnea & 0.15766 & 0.11482 & -27.17 & 3.050e-04 \\
 \hline
-\multicolumn{5}{c}{\textit{Stage 5 Model (Split Sleep)}} \\
-Weekday sleep & -0.01029 & -0.02794 & 171.617 & <0.001 \\
-Weekend sleep & -0.02802 & -0.02930 & 4.587 & <0.001 \\
+\multicolumn{5}{c}{\textit{Stage 5}} \\
+Weekday sleep & -0.01029 & -0.02794 & 171.617 & 5.517e-03 \\
+Weekend sleep & -0.02802 & -0.02930 & 4.587 & 1.689e-03 \\
 \hline
 \end{tabular}
 \end{table}
